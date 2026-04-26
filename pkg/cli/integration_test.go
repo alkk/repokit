@@ -1,0 +1,524 @@
+package cli
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/blakesmith/ar"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestIntegration_InitAddPublish exercises the full happy path: init the repo,
+// stage one fixture .deb, then publish --no-sign. Asserts that:
+//   - the pool file is in place
+//   - dists/.../Packages contains the expected single stanza
+//   - Release references all three Packages variants
+//   - for every Packages/Packages.gz/Packages.xz file, the size and four hashes
+//     recorded in Release match the bytes on disk byte-for-byte (this is the
+//     bug-magnet case for control-stanza-newline drift)
+func TestIntegration_InitAddPublish(t *testing.T) {
+	root := t.TempDir()
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	runCmd := func(name string, args ...string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := Run(append([]string{"--repo", root, name}, args...), &stdout, &stderr, "test-rev")
+		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+	}
+
+	runCmd("init")
+	runCmd("add", "--distro", "debian", "--suite", "bookworm", deb)
+	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
+
+	suiteDir := filepath.Join(root, "dists", "debian", "bookworm")
+	binDir := filepath.Join(suiteDir, "main", "binary-amd64")
+
+	poolFile := filepath.Join(root, "pool", "debian", "bookworm", "main",
+		"h", "hello-gz", "hello-gz_1.0_amd64.deb")
+	assert.FileExists(t, poolFile)
+
+	pkgPath := filepath.Join(binDir, "Packages")
+	pkgBody, err := os.ReadFile(pkgPath)
+	require.NoError(t, err)
+	stanzas := splitPackagesStanzas(pkgBody)
+	require.Len(t, stanzas, 1, "exactly one stanza expected")
+	assert.Contains(t, stanzas[0], "Package: hello-gz\n")
+	assert.Contains(t, stanzas[0], "Filename: pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb\n")
+
+	releaseBody, err := os.ReadFile(filepath.Join(suiteDir, "Release"))
+	require.NoError(t, err)
+	releaseText := string(releaseBody)
+
+	for _, base := range []string{"Packages", "Packages.gz", "Packages.xz"} {
+		assert.Containsf(t, releaseText, "main/binary-amd64/"+base,
+			"Release should reference %s", base)
+	}
+	assert.FileExists(t, filepath.Join(suiteDir, "InRelease"))
+	assert.FileExists(t, filepath.Join(suiteDir, "Release.gpg"))
+
+	for _, base := range []string{"Packages", "Packages.gz", "Packages.xz"} {
+		relPath := "main/binary-amd64/" + base
+		body, err := os.ReadFile(filepath.Join(binDir, base))
+		require.NoErrorf(t, err, "read %s", relPath)
+
+		entries := releaseEntriesFor(t, releaseText, relPath)
+		require.Lenf(t, entries, 4, "expected 4 hash blocks for %s", relPath)
+
+		assert.Equalf(t, int64(len(body)), entries["MD5Sum"].size,
+			"size mismatch for %s in MD5Sum block", relPath)
+		assert.Equalf(t, hashHex(md5.New(), body), entries["MD5Sum"].hash,
+			"MD5 mismatch for %s", relPath)
+		assert.Equalf(t, hashHex(sha1.New(), body), entries["SHA1"].hash,
+			"SHA1 mismatch for %s", relPath)
+		assert.Equalf(t, hashHex(sha256.New(), body), entries["SHA256"].hash,
+			"SHA256 mismatch for %s", relPath)
+		assert.Equalf(t, hashHex(sha512.New(), body), entries["SHA512"].hash,
+			"SHA512 mismatch for %s", relPath)
+	}
+}
+
+// TestIntegration_MultiSuiteMultiArchMultiComponent exercises the full layout:
+// 2 distros × 2 suites × 2 components × {amd64, arm64, all}. It asserts the
+// no-cross-suite-dedup invariant, that arch=all rows fan out into every
+// concrete binary-<arch>/Packages with no binary-all/ directory created, and
+// that Architectures: in Release excludes 'all'. Then it deletes one version
+// and re-publishes to confirm scoped removal leaves siblings intact.
+func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
+	root := t.TempDir()
+	debDir := t.TempDir()
+
+	runCmd := func(name string, args ...string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := Run(append([]string{"--repo", root, name}, args...), &stdout, &stderr, "test-rev")
+		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+	}
+
+	runCmd("init")
+
+	distros := []string{"debian", "ubuntu"}
+	suitesByDistro := map[string][]string{
+		"debian": {"bookworm", "bullseye"},
+		"ubuntu": {"jammy", "noble"},
+	}
+	components := []string{"main", "contrib"}
+	concreteArches := []string{"amd64", "arm64"}
+	matrixArches := []string{"amd64", "arm64", "all"}
+	const (
+		pkgName = "alpha"
+		pkgVer  = "1.0"
+	)
+
+	debCache := map[string]string{}
+	debFor := func(name, version, arch string) string {
+		key := name + "_" + version + "_" + arch
+		if p, ok := debCache[key]; ok {
+			return p
+		}
+		p := buildTestDeb(t, debDir, name, version, arch)
+		debCache[key] = p
+		return p
+	}
+
+	for _, distro := range distros {
+		for _, suite := range suitesByDistro[distro] {
+			for _, comp := range components {
+				args := make([]string, 0, 7+len(matrixArches))
+				args = append(args, "add",
+					"--distro", distro,
+					"--suite", suite,
+					"--component", comp)
+				for _, arch := range matrixArches {
+					args = append(args, debFor(pkgName, pkgVer, arch))
+				}
+				runCmd(args[0], args[1:]...)
+			}
+		}
+	}
+
+	// add a second version into a single scope so the later delete can prove
+	// "other versions remain" rather than just "other suites remain".
+	extraDeb := debFor(pkgName, "2.0", "amd64")
+	runCmd("add",
+		"--distro", "debian", "--suite", "bookworm", "--component", "main",
+		extraDeb)
+
+	runCmd("publish", "--no-sign")
+
+	for _, distro := range distros {
+		for _, suite := range suitesByDistro[distro] {
+			assertSuiteLayout(t, root, distro, suite, components, concreteArches)
+		}
+	}
+
+	// extra version landed only in debian/bookworm/main/binary-amd64.
+	bookwormAmd64 := filepath.Join(root, "dists", "debian", "bookworm",
+		"main", "binary-amd64", "Packages")
+	stanzas := readStanzas(t, bookwormAmd64)
+	require.Len(t, stanzas, 3, "expected 1.0/amd64 + 2.0/amd64 + 1.0/all")
+	assert.True(t, hasStanza(stanzas, "alpha", "2.0", "amd64"),
+		"alpha 2.0 amd64 should be present before delete")
+
+	// no-cross-suite-dedup: same NVRA in two suites of the same distro must
+	// produce two distinct physical pool files with identical content.
+	assertNoCrossSuiteDedup(t, root)
+
+	// scoped delete + republish: drop alpha 1.0 amd64 from debian/bookworm/main
+	// only. Other versions in the same scope and other scopes must survive.
+	runCmd("delete",
+		"--distro", "debian", "--suite", "bookworm", "--component", "main",
+		"--arch", "amd64", "--name", pkgName, "--version", pkgVer)
+	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
+
+	stanzasAfter := readStanzas(t, bookwormAmd64)
+	require.Len(t, stanzasAfter, 2, "1.0/amd64 should be gone, 2.0/amd64 + 1.0/all remain")
+	assert.False(t, hasStanza(stanzasAfter, pkgName, pkgVer, "amd64"),
+		"alpha 1.0 amd64 should be gone from binary-amd64/Packages")
+	assert.True(t, hasStanza(stanzasAfter, pkgName, "2.0", "amd64"),
+		"alpha 2.0 amd64 should remain")
+	assert.True(t, hasStanza(stanzasAfter, pkgName, pkgVer, "all"),
+		"alpha 1.0 arch=all should remain (different row, untouched by delete)")
+
+	// debian/bookworm/main/binary-arm64 still has its 1.0 amd64-equivalent
+	// row (i.e., 1.0/arm64) and the 1.0/all row — delete was scoped to arch=amd64.
+	bookwormArm64 := filepath.Join(root, "dists", "debian", "bookworm",
+		"main", "binary-arm64", "Packages")
+	armStanzas := readStanzas(t, bookwormArm64)
+	require.Len(t, armStanzas, 2)
+	assert.True(t, hasStanza(armStanzas, pkgName, pkgVer, "arm64"))
+	assert.True(t, hasStanza(armStanzas, pkgName, pkgVer, "all"))
+
+	// debian/bullseye/main/binary-amd64 untouched.
+	bullseyeAmd64 := filepath.Join(root, "dists", "debian", "bullseye",
+		"main", "binary-amd64", "Packages")
+	bsStanzas := readStanzas(t, bullseyeAmd64)
+	require.Len(t, bsStanzas, 2)
+	assert.True(t, hasStanza(bsStanzas, pkgName, pkgVer, "amd64"))
+	assert.True(t, hasStanza(bsStanzas, pkgName, pkgVer, "all"))
+
+	// pool file for the deleted row is gone; siblings remain.
+	deletedPool := filepath.Join(root, "pool", "debian", "bookworm", "main",
+		"a", "alpha", "alpha_1.0_amd64.deb")
+	_, err := os.Stat(deletedPool)
+	require.ErrorIsf(t, err, fs.ErrNotExist, "deleted pool file should be gone (got err=%v)", err)
+	survivor := filepath.Join(root, "pool", "debian", "bullseye", "main",
+		"a", "alpha", "alpha_1.0_amd64.deb")
+	assert.FileExists(t, survivor)
+}
+
+// assertSuiteLayout verifies the published structure for one (distro, suite):
+// concrete binary-<arch> directories exist, binary-all does not, the Packages
+// triple is present and consistent with Release, and the Release header lists
+// only concrete arches.
+func assertSuiteLayout(t *testing.T, root, distro, suite string,
+	components, concreteArches []string) {
+	t.Helper()
+	suiteDir := filepath.Join(root, "dists", distro, suite)
+
+	for _, comp := range components {
+		_, err := os.Stat(filepath.Join(suiteDir, comp, "binary-all"))
+		require.ErrorIsf(t, err, fs.ErrNotExist,
+			"%s/%s/%s/binary-all must not be created", distro, suite, comp)
+	}
+
+	for _, comp := range components {
+		for _, arch := range concreteArches {
+			pkgPath := filepath.Join(suiteDir, comp, "binary-"+arch, "Packages")
+			stanzas := readStanzas(t, pkgPath)
+			// every scope receives alpha_1.0_<arch> + alpha_1.0_all; the
+			// extra alpha_2.0_amd64 case is asserted separately by the caller
+			// after this helper returns, so here we expect exactly two.
+			wantCount := 2
+			if distro == "debian" && suite == "bookworm" && comp == "main" && arch == "amd64" {
+				wantCount = 3
+			}
+			require.Lenf(t, stanzas, wantCount,
+				"%s/%s/%s/binary-%s should contain %d stanzas", distro, suite, comp, arch, wantCount)
+			assert.True(t, hasStanza(stanzas, "alpha", "1.0", arch),
+				"alpha 1.0 %s missing from %s/%s/%s", arch, distro, suite, comp)
+			assert.True(t, hasStanza(stanzas, "alpha", "1.0", "all"),
+				"arch=all stanza missing from %s/%s/%s/binary-%s", distro, suite, comp, arch)
+		}
+	}
+
+	releaseBody, err := os.ReadFile(filepath.Join(suiteDir, "Release"))
+	require.NoError(t, err)
+	releaseText := string(releaseBody)
+
+	archs := strings.Fields(headerValue(t, releaseText, "Architectures"))
+	sort.Strings(archs)
+	assert.Equal(t, concreteArches, archs,
+		"Release Architectures should equal concrete arches (no 'all') for %s/%s",
+		distro, suite)
+	assert.NotContains(t, archs, "all", "Architectures must exclude 'all'")
+
+	comps := strings.Fields(headerValue(t, releaseText, "Components"))
+	sort.Strings(comps)
+	wantComps := append([]string(nil), components...)
+	sort.Strings(wantComps)
+	assert.Equal(t, wantComps, comps, "Release Components mismatch for %s/%s", distro, suite)
+
+	for _, comp := range components {
+		for _, arch := range concreteArches {
+			for _, base := range []string{"Packages", "Packages.gz", "Packages.xz"} {
+				rel := comp + "/binary-" + arch + "/" + base
+				body, err := os.ReadFile(filepath.Join(suiteDir, rel))
+				require.NoErrorf(t, err, "read %s in %s/%s", rel, distro, suite)
+				entries := releaseEntriesFor(t, releaseText, rel)
+				require.Lenf(t, entries, 4, "%s missing hash blocks in %s/%s Release",
+					rel, distro, suite)
+				assert.Equalf(t, int64(len(body)), entries["MD5Sum"].size,
+					"size mismatch for %s in %s/%s", rel, distro, suite)
+				assert.Equalf(t, hashHex(sha256.New(), body), entries["SHA256"].hash,
+					"sha256 mismatch for %s in %s/%s", rel, distro, suite)
+			}
+		}
+	}
+}
+
+// assertNoCrossSuiteDedup confirms that the same NVRA staged into two suites
+// of the same distro lands at distinct physical pool paths with byte-identical
+// content but separate inodes — debrepo never aliases pool files across suites.
+func assertNoCrossSuiteDedup(t *testing.T, root string) {
+	t.Helper()
+	bookworm := filepath.Join(root, "pool", "debian", "bookworm", "main",
+		"a", "alpha", "alpha_1.0_amd64.deb")
+	bullseye := filepath.Join(root, "pool", "debian", "bullseye", "main",
+		"a", "alpha", "alpha_1.0_amd64.deb")
+
+	require.NotEqual(t, bookworm, bullseye, "pool paths must differ across suites")
+
+	info1, err := os.Stat(bookworm)
+	require.NoError(t, err)
+	info2, err := os.Stat(bullseye)
+	require.NoError(t, err)
+	assert.False(t, os.SameFile(info1, info2),
+		"pool files in two suites must be distinct physical files")
+
+	body1, err := os.ReadFile(bookworm)
+	require.NoError(t, err)
+	body2, err := os.ReadFile(bullseye)
+	require.NoError(t, err)
+	assert.Equal(t, body1, body2,
+		"pool file content must be identical across suites (same source .deb)")
+}
+
+// releaseEntry captures one " <hash> <size> <path>" line.
+type releaseEntry struct {
+	hash string
+	size int64
+}
+
+// releaseEntriesFor scans a Release file and returns one entry per
+// MD5Sum/SHA1/SHA256/SHA512 block whose path equals target. It is intentionally
+// minimal — covers the entry shape produced by writeChecksumBlocks in
+// pkg/index/release.go.
+func releaseEntriesFor(t *testing.T, body, target string) map[string]releaseEntry {
+	t.Helper()
+	out := map[string]releaseEntry{}
+	var current string
+	for line := range strings.SplitSeq(body, "\n") {
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, " ") {
+			if current == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) != 3 || fields[2] != target {
+				continue
+			}
+			size, err := strconv.ParseInt(fields[1], 10, 64)
+			require.NoError(t, err)
+			out[current] = releaseEntry{hash: fields[0], size: size}
+			continue
+		}
+		idx := strings.Index(line, ":")
+		if idx <= 0 {
+			continue
+		}
+		key := line[:idx]
+		val := strings.TrimSpace(line[idx+1:])
+		if val == "" {
+			current = key
+		} else {
+			current = ""
+		}
+	}
+	return out
+}
+
+// headerValue returns the value of a Release header line whose key is exactly
+// name (e.g. "Architectures"). Continuation/indented lines are not headers.
+func headerValue(t *testing.T, body, name string) string {
+	t.Helper()
+	prefix := name + ":"
+	for line := range strings.SplitSeq(body, "\n") {
+		if strings.HasPrefix(line, " ") {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	t.Fatalf("Release header %q not found", name)
+	return ""
+}
+
+// readStanzas reads a Packages file and splits it into stanza strings.
+func readStanzas(t *testing.T, path string) []string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return splitPackagesStanzas(body)
+}
+
+// splitPackagesStanzas splits a Packages body into stanzas. An empty body
+// yields an empty slice rather than a single empty stanza.
+func splitPackagesStanzas(body []byte) []string {
+	trimmed := strings.TrimRight(string(body), "\n")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n\n")
+}
+
+// hasStanza reports whether any stanza in stanzas describes (name, version, arch).
+// Match is anchored on full Package/Version/Architecture lines so prefix matches
+// (alpha vs alpha-doc) don't fool it.
+//
+//nolint:unparam // generic helper kept name-agnostic for future fixtures
+func hasStanza(stanzas []string, name, version, arch string) bool {
+	wantName := "Package: " + name + "\n"
+	wantVer := "Version: " + version + "\n"
+	wantArch := "Architecture: " + arch + "\n"
+	for _, s := range stanzas {
+		if !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		if strings.Contains(s, wantName) && strings.Contains(s, wantVer) && strings.Contains(s, wantArch) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildTestDeb generates a minimal .deb at <dir>/<name>_<version>_<arch>.deb
+// and returns its absolute path. Used by integration tests to avoid committing
+// a combinatorial set of binary fixtures while still exercising deb.Inspect.
+func buildTestDeb(t *testing.T, dir, name, version, arch string) string {
+	t.Helper()
+
+	control := fmt.Sprintf(
+		"Package: %s\nVersion: %s\nArchitecture: %s\n"+
+			"Maintainer: debrepo tests <test@example.invalid>\n"+
+			"Description: %s integration fixture (%s/%s)\n",
+		name, version, arch, name, version, arch)
+
+	controlTar, err := buildTestTar("control", []byte(control))
+	require.NoError(t, err)
+	controlGz, err := gzipBytes(controlTar)
+	require.NoError(t, err)
+
+	dataTar, err := buildTestTar("usr/share/"+name+".txt", []byte("hello\n"))
+	require.NoError(t, err)
+	dataGz, err := gzipBytes(dataTar)
+	require.NoError(t, err)
+
+	out := filepath.Join(dir, fmt.Sprintf("%s_%s_%s.deb", name, version, arch))
+	f, err := os.Create(out)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+
+	w := ar.NewWriter(f)
+	require.NoError(t, w.WriteGlobalHeader())
+
+	mtime := time.Unix(1700000000, 0).UTC()
+	require.NoError(t, writeArMember(w, "debian-binary", []byte("2.0\n"), mtime))
+	require.NoError(t, writeArMember(w, "control.tar.gz", controlGz, mtime))
+	require.NoError(t, writeArMember(w, "data.tar.gz", dataGz, mtime))
+	return out
+}
+
+// buildTestTar produces a tar archive containing a single regular file at
+// "./<filename>", with parent "./" and any intermediate directories in
+// filename also emitted as TypeDir entries (mirrors what dpkg-deb produces).
+func buildTestTar(filename string, body []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	mtime := time.Unix(1700000000, 0).UTC()
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "./", Mode: 0o755, Typeflag: tar.TypeDir, ModTime: mtime,
+	}); err != nil {
+		return nil, fmt.Errorf("tar root header: %w", err)
+	}
+	parts := strings.Split(filename, "/")
+	parents := parts[:len(parts)-1]
+	for i := range parents {
+		dir := "./" + strings.Join(parents[:i+1], "/") + "/"
+		if err := tw.WriteHeader(&tar.Header{
+			Name: dir, Mode: 0o755, Typeflag: tar.TypeDir, ModTime: mtime,
+		}); err != nil {
+			return nil, fmt.Errorf("tar dir header %s: %w", dir, err)
+		}
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "./" + filename, Mode: 0o644, Size: int64(len(body)),
+		Typeflag: tar.TypeReg, ModTime: mtime,
+	}); err != nil {
+		return nil, fmt.Errorf("tar file header %s: %w", filename, err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		return nil, fmt.Errorf("tar body %s: %w", filename, err)
+	}
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("tar close: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// gzipBytes wraps raw in a fresh gzip stream.
+func gzipBytes(raw []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(raw); err != nil {
+		return nil, fmt.Errorf("gzip write: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return nil, fmt.Errorf("gzip close: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// writeArMember appends one ar member with body. ModTime/uid/gid are fixed for
+// reproducibility.
+func writeArMember(w *ar.Writer, name string, body []byte, mtime time.Time) error {
+	hdr := &ar.Header{
+		Name: name, ModTime: mtime, Uid: 0, Gid: 0, Mode: 0o100644, Size: int64(len(body)),
+	}
+	if err := w.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("ar header %s: %w", name, err)
+	}
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("ar body %s: %w", name, err)
+	}
+	return nil
+}

@@ -1,0 +1,11 @@
+signing_key: "DEADBEEF1234"
+suites:
+  debian/bookworm:
+    origin: "MyRepo"
+    label: "MyRepo"
+    suite: "bookworm"
+    codename: "bookworm"
+    description: "Internal builds for Debian 12"
+  debian/bullseye:
+    origin: "MyRepo"
+    label: "MyRepo"

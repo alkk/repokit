@@ -1,0 +1,3 @@
+suites:
+  debian/bookworm:
+    origin: "MyRepo"
