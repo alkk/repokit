@@ -17,7 +17,7 @@ builds:
 
 archives:
   - id: debrepo
-    builds:
+    ids:
       - debrepo
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
@@ -25,7 +25,7 @@ archives:
 nfpms:
   - id: debrepo
     package_name: debrepo
-    builds:
+    ids:
       - debrepo
     vendor: netxms
     homepage: https://github.com/netxms/debrepo

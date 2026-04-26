@@ -113,4 +113,4 @@ The tree is fully static — any HTTPS server (S3, nginx, GitHub Pages) will do.
 
 ## License
 
-TBD.
+MIT — see [LICENSE](LICENSE).

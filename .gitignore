@@ -1,5 +1,6 @@
 *.exe
 .bin/
+dist/
 coverage*.out
 *.test
 *.out
