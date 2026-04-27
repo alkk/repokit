@@ -44,13 +44,13 @@ func TestVerifyTamperedFileDetected(t *testing.T) {
 	initRepoForTest(t, root)
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	tampered := filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	tampered := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.WriteFile(tampered, []byte("not a real deb"), 0o644))
 
 	code, stdout, stderr := runVerify(t, root)
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "mismatch pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
+	assert.Contains(t, stdout, "mismatch debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 mismatch(es)")
 }
 
@@ -59,13 +59,13 @@ func TestVerifyMissingPoolFileDetected(t *testing.T) {
 	initRepoForTest(t, root)
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	target := filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	target := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.Remove(target))
 
 	code, stdout, stderr := runVerify(t, root)
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "missing pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
+	assert.Contains(t, stdout, "missing debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 missing")
 }
 
@@ -74,14 +74,14 @@ func TestVerifyOrphanDetected(t *testing.T) {
 	initRepoForTest(t, root)
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	orphan := filepath.Join(root, "pool", "debian", "bookworm", "main", "g", "ghost",
+	orphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, root)
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "orphan pool/debian/bookworm/main/g/ghost/ghost_1.0_amd64.deb")
+	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 orphan(s)")
 
 	assert.FileExists(t, orphan, "orphan must remain on disk without --gc")
@@ -92,16 +92,16 @@ func TestVerifyGCRemovesOnlyOrphan(t *testing.T) {
 	initRepoForTest(t, root)
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	legit := filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	legit := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
-	orphan := filepath.Join(root, "pool", "debian", "bookworm", "main", "g", "ghost",
+	orphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, root, "--gc")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "orphan pool/debian/bookworm/main/g/ghost/ghost_1.0_amd64.deb (removed)")
+	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb (removed)")
 	assert.Contains(t, stdout, "verify: ok")
 
 	assert.NoFileExists(t, orphan, "--gc must remove orphan")
@@ -114,7 +114,7 @@ func TestVerifyGCDoesNotRemoveRowsForMissingPoolFiles(t *testing.T) {
 	initRepoForTest(t, root)
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	target := filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	target := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.Remove(target))
 
@@ -130,7 +130,7 @@ func TestVerifyScopedToSuiteIgnoresOtherSuites(t *testing.T) {
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 	addFixtureForTest(t, root, "bullseye", "hello-gz_1.0_amd64.deb")
 
-	otherOrphan := filepath.Join(root, "pool", "debian", "bullseye", "main", "g", "ghost",
+	otherOrphan := filepath.Join(root, "debian", "pool", "bullseye", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(otherOrphan), 0o755))
 	require.NoError(t, os.WriteFile(otherOrphan, []byte("orphan"), 0o644))
@@ -170,15 +170,15 @@ func TestVerifyScopedToDistroCoversAllSuites(t *testing.T) {
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 	addFixtureForTest(t, root, "bullseye", "hello-gz_1.0_amd64.deb")
 
-	bookOrphan := filepath.Join(root, "pool", "debian", "bookworm", "main", "g", "ghost",
+	bookOrphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost-book_1.0_amd64.deb")
-	bullOrphan := filepath.Join(root, "pool", "debian", "bullseye", "main", "g", "ghost",
+	bullOrphan := filepath.Join(root, "debian", "pool", "bullseye", "main", "g", "ghost",
 		"ghost-bull_1.0_amd64.deb")
 	for _, p := range []string{bookOrphan, bullOrphan} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte("orphan"), 0o644))
 	}
-	otherDistroOrphan := filepath.Join(root, "pool", "ubuntu", "noble", "main", "g", "ghost",
+	otherDistroOrphan := filepath.Join(root, "ubuntu", "pool", "noble", "main", "g", "ghost",
 		"ghost-noble_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(otherDistroOrphan), 0o755))
 	require.NoError(t, os.WriteFile(otherDistroOrphan, []byte("orphan"), 0o644))
@@ -204,7 +204,7 @@ func TestVerifyGCPreservesPoolWriteArtifacts(t *testing.T) {
 	initRepoForTest(t, root)
 	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	dest := filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	dest := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.WriteFile(dest+".bak", []byte("old bytes"), 0o644))
 	require.NoError(t, os.WriteFile(dest+".tmp", []byte("new bytes"), 0o644))
@@ -273,6 +273,60 @@ func TestVerifyGCSerializesWithConcurrentWriter(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("verify --gc did not finish after writer lock release")
 	}
+}
+
+// TestVerifyUnscopedAcrossDistrosFindsOrphans guards the multi-distro unscoped
+// path: with no --distro flag, verify must enumerate every distro and walk
+// each per-distro pool tree, reporting orphans from all of them.
+func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", root, "add",
+		"--distro", "ubuntu", "--suite", "noble",
+		fixtureDeb(t, "hello-gz_1.0_amd64.deb"),
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "fixture add for ubuntu failed: %s", stderr.String())
+
+	debianOrphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
+		"ghost-deb_1.0_amd64.deb")
+	ubuntuOrphan := filepath.Join(root, "ubuntu", "pool", "noble", "main", "g", "ghost",
+		"ghost-ubu_1.0_amd64.deb")
+	for _, p := range []string{debianOrphan, ubuntuOrphan} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("orphan"), 0o644))
+	}
+
+	code, out, errOut := runVerify(t, root, "--gc")
+	require.Equal(t, ExitOK, code, "stderr: %s", errOut)
+	assert.Contains(t, out, "orphan debian/pool/bookworm/main/g/ghost/ghost-deb_1.0_amd64.deb (removed)")
+	assert.Contains(t, out, "orphan ubuntu/pool/noble/main/g/ghost/ghost-ubu_1.0_amd64.deb (removed)")
+	assert.NoFileExists(t, debianOrphan)
+	assert.NoFileExists(t, ubuntuOrphan)
+}
+
+// TestVerifyUnscopedFindsOrphansInDBEmptyDistro guards against the
+// regression where unscoped verify enumerates only DB-known distros and
+// silently misses orphan files in a distro that has no rows at all (e.g.
+// after a crashed add or a delete pass that removed the last row but
+// failed to clean up the pool file). The disk side of the union must
+// still pull the distro into the orphan walk.
+func TestVerifyUnscopedFindsOrphansInDBEmptyDistro(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+
+	orphan := filepath.Join(root, "ubuntu", "pool", "noble", "main", "g", "ghost",
+		"ghost_1.0_amd64.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
+	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
+
+	code, stdout, stderr := runVerify(t, root, "--gc")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "orphan ubuntu/pool/noble/main/g/ghost/ghost_1.0_amd64.deb (removed)")
+	assert.NoFileExists(t, orphan, "--gc must reclaim orphans even when the distro has no DB rows")
 }
 
 func TestVerifyRejectsUnsafeScope(t *testing.T) {

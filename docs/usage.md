@@ -36,8 +36,9 @@ staging siblings.
 
 ### `init`
 
-Create a new repository. Writes `pool/`, `dists/`, an empty `repo.db` with the
-current schema, and a starter `config.yaml`.
+Create a new repository. Writes an empty `repo.db` with the current schema and
+a starter `config.yaml` at the repo root. Per-distro `pool/` and `dists/`
+subtrees are created on demand by the first `add` and `publish`.
 
 ```
 debrepo init [<repo-root>]
@@ -87,7 +88,7 @@ insert.
 Remove packages from a suite. Mutates `repo.db` and `pool/` only — running
 `publish` afterwards is required to remove the entries from the apt indexes.
 A subsequent `publish` (with explicit `--distro`/`--suite` or both omitted)
-rebuilds `dists/<distro>/<suite>/` even when `delete` emptied the suite —
+rebuilds `<distro>/dists/<suite>/` even when `delete` emptied the suite —
 empty `Packages` files and a `Release` with empty
 `Architectures:`/`Components:` are written so apt clients stop seeing the
 removed packages.
@@ -151,7 +152,7 @@ acceptable at thousands of packages but degrades at six-figure scale.
 
 ### `publish`
 
-Rebuild `dists/<distro>/<suite>/` for one or more scopes and sign the resulting
+Rebuild `<distro>/dists/<suite>/` for one or more scopes and sign the resulting
 `Release`.
 
 ```
@@ -166,19 +167,22 @@ debrepo publish [--distro <d> --suite <s>] [--no-sign]
 
 Both scope flags omitted means publish every suite known to the repository —
 every suite with at least one row in the packages table, plus every suite that
-already has a live `dists/<distro>/<suite>/Release` on disk. The filesystem
+already has a live `<distro>/dists/<suite>/Release` on disk. The filesystem
 half ensures that a suite emptied by `delete` is republished with empty
-indexes so apt clients stop seeing the stale `Packages`/`Release` files.
+indexes so apt clients stop seeing the stale `Packages`/`Release` files. Top-
+level repo-root entries that aren't directories or whose names fail
+distro-name validation, and directories that don't contain a `dists/`
+subdirectory, are skipped — so stray files (`repo.db`, `config.yaml`,
+`pubkey.asc`) and unrelated user-created dirs don't trigger spurious distros.
 Staging siblings (`<suite>.new`, `<suite>.old`) and directories without a
-`Release` file are skipped, so stray hand-created subdirectories under
-`dists/` are not touched.
+`Release` file under `<distro>/dists/` are likewise skipped.
 
 Specifying one scope flag without the other is a usage error.
 
 For each scope, publish:
 
 1. Cleans any leftover `<suite>.new` and `<suite>.old` from a prior crashed run.
-2. Builds `dists/<distro>/<suite>.new/` with one Packages triple
+2. Builds `<distro>/dists/<suite>.new/` with one Packages triple
    (`Packages`/`Packages.gz`/`Packages.xz`) per `(component, concrete-arch)`
    pair present in the DB. `arch=all` rows are included in every concrete
    `binary-<arch>/Packages` (apt convention — no `binary-all/` directory).
@@ -280,21 +284,26 @@ error. Pass `--no-sign` for unsigned test repos.
 
 ## On-disk layout
 
+Each `<distro>` subtree is a self-contained apt repo root: an apt client
+points `URI` at `<server-root>/<distro>` and resolves
+`dists/<suite>/Release` relative to that base.
+
 ```
 <repo-root>/
-├── repo.db                     # SQLite — sole source of truth for metadata
-├── config.yaml                 # signing key + per-suite Release overrides
-├── pool/
-│   └── <distro>/<suite>/<component>/<letter>/<source>/<pkg>_<ver>_<arch>.deb
-└── dists/
-    └── <distro>/<suite>/
-        ├── Release             # plain-text apt Release file
-        ├── Release.gpg         # detached ASCII-armored signature
-        ├── InRelease           # clearsigned Release (preferred by modern apt)
-        └── <component>/binary-<arch>/
-            ├── Packages
-            ├── Packages.gz
-            └── Packages.xz
+├── repo.db                     # SQLite — sole source of truth for metadata (shared)
+├── config.yaml                 # signing key + per-suite Release overrides (shared)
+└── <distro>/                   # one subtree per distro — its own apt repo root
+    ├── pool/
+    │   └── <suite>/<component>/<letter>/<source>/<pkg>_<ver>_<arch>.deb
+    └── dists/
+        └── <suite>/
+            ├── Release         # plain-text apt Release file
+            ├── Release.gpg     # detached ASCII-armored signature
+            ├── InRelease       # clearsigned Release (preferred by modern apt)
+            └── <component>/binary-<arch>/
+                ├── Packages
+                ├── Packages.gz
+                └── Packages.xz
 ```
 
 `<letter>` is the first character of the source name (or package name, if the
@@ -302,9 +311,16 @@ control stanza has no `Source` field), lowercased. Names beginning with `lib`
 use `lib<second-letter>` per Debian convention (e.g. `libfoo` →
 `libf/libfoo/`).
 
+The `Filename:` field emitted in each `Packages` index is apt-relative — it
+omits the leading `<distro>` segment and reads
+`pool/<suite>/<component>/<letter>/<source>/<pkg>_<ver>_<arch>.deb`. Apt
+joins it onto the configured `URI` (which already ends in `/<distro>`) to
+form the download URL.
+
 Pools are isolated per `(distro, suite)`: the same NVRA added to two suites of
-the same distro produces two separate physical files at different paths with
-identical content. There is no cross-suite dedup.
+the same distro produces two separate physical files at
+`<root>/<distro>/pool/<suite>/...` with identical content. There is no
+cross-suite dedup.
 
 ## Database schema
 
@@ -320,7 +336,7 @@ CREATE TABLE packages (
     architecture  TEXT NOT NULL,
     name          TEXT NOT NULL,
     version       TEXT NOT NULL,
-    filename      TEXT NOT NULL,         -- pool-relative path
+    filename      TEXT NOT NULL,         -- apt-relative path; no distro prefix (relative to <root>/<distro>)
     size          INTEGER NOT NULL,
     md5           TEXT NOT NULL,
     sha1          TEXT NOT NULL,

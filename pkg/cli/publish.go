@@ -171,7 +171,7 @@ func publishScope(ctx context.Context, root string, r *repo.Repo, cfg *config.Co
 // publishScope) from committing until the swap completes.
 func publishScopeLocked(ctx context.Context, root string, r *repo.Repo, cfg *config.Config,
 	signer sign.Signer, distro, suite string) error {
-	distsParent := filepath.Join(root, distsDir, distro)
+	distsParent := filepath.Join(root, distro, distsDir)
 	livePath := filepath.Join(distsParent, suite)
 	newPath := livePath + suiteSuffixNew
 	oldPath := livePath + suiteSuffixOld
@@ -491,26 +491,44 @@ func dbScopes(ctx context.Context, r *repo.Repo) ([]scope, error) {
 	return out, nil
 }
 
-// filesystemScopes walks dists/<distro>/<suite>/ to discover suites with an
-// existing live tree on disk. Staging siblings (.new, .old) are skipped, and
-// only directories that contain a Release file are treated as publish targets
-// — without that gate, a stray directory under dists/ would be wiped by the
+// filesystemScopes walks <root>/<distro>/dists/<suite>/ to discover suites
+// with an existing live tree on disk. The outer loop reads top-level <root>
+// entries and treats each directory that passes validateScopeName and
+// contains a dists/ subdirectory as a candidate distro — stray files at root
+// (repo.db, config.yaml, pubkey.asc) and arbitrary user-created dirs are
+// skipped, and the validateScopeName gate prevents a malformed top-level
+// directory name from triggering atomic-swap operations on unrelated content.
+// Staging siblings (.new, .old) are skipped at the suite level, and only
+// directories that contain a Release file are treated as publish targets —
+// without that gate, a stray directory under dists/ would be wiped by the
 // atomic swap on the next publish (no flags).
 func filesystemScopes(root string) ([]scope, error) {
-	distsRoot := filepath.Join(root, distsDir)
-	distros, err := os.ReadDir(distsRoot)
+	topLevel, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading %s: %w", distsRoot, err)
+		return nil, fmt.Errorf("reading %s: %w", root, err)
 	}
 	var out []scope
-	for _, d := range distros {
+	for _, d := range topLevel {
 		if !d.IsDir() {
 			continue
 		}
-		suitesPath := filepath.Join(distsRoot, d.Name())
+		if err := validateScopeName("distro", d.Name()); err != nil {
+			continue
+		}
+		suitesPath := filepath.Join(root, d.Name(), distsDir)
+		info, err := os.Stat(suitesPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", suitesPath, err)
+		}
+		if !info.IsDir() {
+			continue
+		}
 		suites, err := os.ReadDir(suitesPath)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", suitesPath, err)
@@ -528,9 +546,6 @@ func filesystemScopes(root string) ([]scope, error) {
 					continue
 				}
 				return nil, fmt.Errorf("stat %s: %w", filepath.Join(suitesPath, name, releaseFilename), err)
-			}
-			if err := validateScopeName("distro", d.Name()); err != nil {
-				continue
 			}
 			if err := validateScopeName("suite", name); err != nil {
 				continue

@@ -30,7 +30,7 @@ func samplePackage(name string) repo.Package {
 		Architecture: "amd64",
 		Name:         name,
 		Version:      "1.0",
-		Filename:     "pool/debian/bookworm/main/" + name[:1] + "/" + name + "/" + name + "_1.0_amd64.deb",
+		Filename:     "pool/bookworm/main/" + name[:1] + "/" + name + "/" + name + "_1.0_amd64.deb",
 		Size:         1234,
 		MD5:          "0123456789abcdef0123456789abcdef",
 		SHA1:         "0123456789abcdef0123456789abcdef01234567",
@@ -53,7 +53,7 @@ func TestWritePackages_GoldenSingleStanza(t *testing.T) {
 		"Architecture: amd64\n" +
 		"Maintainer: Test <test@example.com>\n" +
 		"Description: sample hello\n" +
-		"Filename: pool/debian/bookworm/main/h/hello/hello_1.0_amd64.deb\n" +
+		"Filename: pool/bookworm/main/h/hello/hello_1.0_amd64.deb\n" +
 		"Size: 1234\n" +
 		"MD5sum: 0123456789abcdef0123456789abcdef\n" +
 		"SHA1: 0123456789abcdef0123456789abcdef01234567\n" +

@@ -56,9 +56,11 @@ func (cmd *InfoCmd) run(w io.Writer) error {
 	fmt.Fprintf(w, "SHA512:       %s\n", info.SHA512)
 
 	if cmd.Distro != "" && cmd.Suite != "" {
-		relPath := pool.Path(cmd.Distro, cmd.Suite, cmd.Component,
+		filename := pool.Filename(cmd.Suite, cmd.Component,
 			info.Source, info.Name, info.Version, info.Architecture)
-		fmt.Fprintf(w, "Pool path:    %s\n", relPath)
+		diskPath := pool.DiskPath(cmd.Distro, filename)
+		fmt.Fprintf(w, "Pool path (apt):  %s\n", filename)
+		fmt.Fprintf(w, "Pool path (disk): %s\n", diskPath)
 	} else {
 		fmt.Fprintln(w, "Pool path:    (provide --distro and --suite to compute)")
 	}

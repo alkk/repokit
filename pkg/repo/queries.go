@@ -171,6 +171,31 @@ func deletePackages(ctx context.Context, q queryer, filter Filter) ([]Package, e
 	return rows, nil
 }
 
+// EnumerateDistros returns every distinct distro present in the packages
+// table, sorted ascending. An empty slice is returned when the table has no
+// rows (no error).
+func (r *Repo) EnumerateDistros(ctx context.Context) ([]string, error) {
+	return enumerateDistros(ctx, r.db)
+}
+
+// EnumerateDistrosConn is the writer-lock-aware variant of EnumerateDistros.
+// It reads through the supplied connection so the result reflects the
+// snapshot held by an explicit BEGIN IMMEDIATE on that connection (see
+// WithWriterLock); pair with ListConn so a concurrent add cannot introduce a
+// new distro between row enumeration and per-distro orphan scanning.
+func (r *Repo) EnumerateDistrosConn(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	return enumerateDistros(ctx, conn)
+}
+
+func enumerateDistros(ctx context.Context, q queryer) ([]string, error) {
+	distros, err := collectStrings(ctx, q,
+		`SELECT DISTINCT distro FROM packages ORDER BY distro`)
+	if err != nil {
+		return nil, fmt.Errorf("enumerating distros: %w", err)
+	}
+	return distros, nil
+}
+
 // EnumerateForSuite returns the distinct components and architectures present
 // in the given (distro, suite) scope, sorted ascending. Empty slices are
 // returned when the scope is empty (no error).

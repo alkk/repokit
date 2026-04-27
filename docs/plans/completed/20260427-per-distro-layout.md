@@ -157,23 +157,23 @@ that already gates suite/component runs against `distro` in every command.
 - Modify: `pkg/pool/pool.go`
 - Modify: `pkg/pool/pool_test.go`
 
-- [ ] rename `Path` → `Filename` in `pkg/pool/pool.go`; drop the `distro`
+- [x] rename `Path` → `Filename` in `pkg/pool/pool.go`; drop the `distro`
       parameter; new return form `pool/<suite>/<comp>/<letter>/<src>/<file>.deb`
-- [ ] add `DiskPath(distro, filename string) string` returning
+- [x] add `DiskPath(distro, filename string) string` returning
       `path.Join(distro, filename)` (forward slashes, repo-root-relative)
-- [ ] update the **package-level doc comment** at `pool.go:1-3` (currently
+- [x] update the **package-level doc comment** at `pool.go:1-3` (currently
       says "paths returned and accepted by this package … are repo-relative
       and serialized verbatim into Packages files" — that conflates the two
       roles the split is now separating) to describe the two-path split:
       `Filename` is apt-relative and serialized into `Packages`; `DiskPath`
       composes the disk-relative path used for I/O. Same update on
       `Filename`'s and `DiskPath`'s own doc comments
-- [ ] update `pkg/pool/pool_test.go`: rename `TestPath` cases, drop
+- [x] update `pkg/pool/pool_test.go`: rename `TestPath` cases, drop
       `distro` from inputs, update expected strings to drop the `<distro>`
       segment
-- [ ] add a small test for `DiskPath` covering the join shape and that
+- [x] add a small test for `DiskPath` covering the join shape and that
       different distros yield different disk paths
-- [ ] run `go test ./pkg/pool/...` — must pass before next task
+- [x] run `go test ./pkg/pool/...` — must pass before next task
 
 ### Task 2: Update pool callers (add, info, delete)
 
@@ -193,33 +193,33 @@ changes from `(relPath, ...)` to `(diskPath, filename, ...)` so the caller
 can both feed `diskPath` to `pool.RollbackReplace` / `FinalizeReplace` and
 keep `filename` as the DB-column comparison value.
 
-- [ ] `add.go:145` — split `pool.Path(...)` into `filename` (apt-relative)
+- [x] `add.go:145` — split `pool.Path(...)` into `filename` (apt-relative)
       and `diskPath` (= `pool.DiskPath(cmd.Distro, filename)`)
-- [ ] `add.go:155` — DB row stores `Filename: filename`
-- [ ] `add.go:175` — comparison `old.Filename != filename` (DB-column form)
-- [ ] `add.go:176` — `stale = pool.DiskPath(cmd.Distro, old.Filename)` so
+- [x] `add.go:155` — DB row stores `Filename: filename`
+- [x] `add.go:175` — comparison `old.Filename != filename` (DB-column form)
+- [x] `add.go:176` — `stale = pool.DiskPath(cmd.Distro, old.Filename)` so
       the value pushed into `staleReplaced` is disk-relative for
       `pool.Delete` at line 115
-- [ ] `add.go:192` — `writePool(c.Root, diskPath, ...)` (disk-relative)
-- [ ] `add.go:215-218` (`reconcileBackup`) — same split: compute `filename`
+- [x] `add.go:192` — `writePool(c.Root, diskPath, ...)` (disk-relative)
+- [x] `add.go:215-218` (`reconcileBackup`) — same split: compute `filename`
       and `diskPath`; `dest := filepath.Join(c.Root, filepath.FromSlash(diskPath))`
-- [ ] `add.go:235` — `row.Filename != filename` (DB-column comparison)
-- [ ] `add.go:245` — `pool.ReconcileBackup(c.Root, diskPath, committed)`
-- [ ] `add.go:79`, `:92` — `written` collects `diskPath` values so
+- [x] `add.go:235` — `row.Filename != filename` (DB-column comparison)
+- [x] `add.go:245` — `pool.ReconcileBackup(c.Root, diskPath, committed)`
+- [x] `add.go:79`, `:92` — `written` collects `diskPath` values so
       `pool.RollbackReplace(c.Root, written[i], backups[i])` resolves
       correctly
-- [ ] `info.go:59` — same Filename/DiskPath split for the displayed
+- [x] `info.go:59` — same Filename/DiskPath split for the displayed
       target path; clarify in the printed output what's apt-relative vs.
       on-disk if both are shown
-- [ ] `delete.go:138` — `pool.Delete(c.Root, pool.DiskPath(p.Distro, p.Filename))`
-- [ ] update `add_test.go`: `Filename` assertions drop the `<distro>` segment;
+- [x] `delete.go:138` — `pool.Delete(c.Root, pool.DiskPath(p.Distro, p.Filename))`
+- [x] update `add_test.go`: `Filename` assertions drop the `<distro>` segment;
       on-disk path assertions now nest distro *before* `pool/`
-- [ ] update `info_test.go`: same expectation flip
-- [ ] update `delete_test.go` fixtures (lines ~83, 85, 215, 217 use the
+- [x] update `info_test.go`: same expectation flip
+- [x] update `delete_test.go` fixtures (lines ~83, 85, 215, 217 use the
       old `pool/<distro>/<suite>/...` form): drop the `<distro>` segment
       from `Filename` values; on-disk fixtures now place files at
       `<root>/<distro>/pool/<suite>/...`
-- [ ] run `go test ./pkg/cli/... -run 'TestAdd|TestInfo|TestDelete'` —
+- [x] run `go test ./pkg/cli/... -run 'TestAdd|TestInfo|TestDelete'` —
       must pass before next task
 
 ### Task 3: Move dists tree under each distro (publish)
@@ -228,12 +228,12 @@ keep `filename` as the DB-column comparison value.
 - Modify: `pkg/cli/publish.go`
 - Modify: `pkg/cli/publish_test.go`
 
-- [ ] in `publishScope`, change `distsParent := filepath.Join(root,
+- [x] in `publishScope`, change `distsParent := filepath.Join(root,
       distsDir, distro)` → `filepath.Join(root, distro, distsDir)`
-- [ ] verify `livePath`, `newPath`, `oldPath`, and `swapDists` still work
+- [x] verify `livePath`, `newPath`, `oldPath`, and `swapDists` still work
       with the new `distsParent` (they should — only the parent path
       changed, not its semantics)
-- [ ] in `filesystemScopes`, replace the single `os.ReadDir(<root>/dists)`
+- [x] in `filesystemScopes`, replace the single `os.ReadDir(<root>/dists)`
       walk with: read top-level `<root>` entries; for each entry that is a
       directory **and** passes `validateScopeName("distro", entry.Name())`
       **and** contains a `dists/` subdirectory, treat it as a candidate
@@ -243,9 +243,9 @@ keep `filename` as the DB-column comparison value.
       distros — without the validateScopeName gate, a top-level dir with a
       malformed name happening to contain `dists/` could trigger the
       atomic-swap code on unrelated content
-- [ ] update `publish_test.go` fixtures and assertions to match the new
+- [x] update `publish_test.go` fixtures and assertions to match the new
       layout
-- [ ] run `go test ./pkg/cli/... -run 'TestPublish'` — must pass before
+- [x] run `go test ./pkg/cli/... -run 'TestPublish'` — must pass before
       next task
 
 ### Task 4: Update verify (rehash + orphan scan)
@@ -266,27 +266,27 @@ walk-side `key` via `filepath.Rel(root, p)` which now yields
 and every real file would be reported as orphan. Fix by keying `known` with
 disk-relative paths: `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`.
 
-- [ ] add `(*Repo).EnumerateDistros(ctx context.Context) ([]string,
+- [x] add `(*Repo).EnumerateDistros(ctx context.Context) ([]string,
       error)` to `pkg/repo/queries.go` — `SELECT DISTINCT distro FROM
       packages ORDER BY distro`. Implement on the same connection-handle
       type used by `EnumeratePackages` so the unscoped GC path can call it
       under the same writer lock (no separate connection — avoids a race
       where a concurrent `add` introduces a new distro between
       enumeration and the per-distro scan)
-- [ ] `verify.go:160` — `pool.SafeJoin(root, pool.DiskPath(p.Distro, p.Filename))`
-- [ ] `verify.go:124` and `:145` — populate `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`
+- [x] `verify.go:160` — `pool.SafeJoin(root, pool.DiskPath(p.Distro, p.Filename))`
+- [x] `verify.go:124` and `:145` — populate `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`
       so its keys match the disk-relative `key` built in `scanOrphans`
-- [ ] update `scopePoolDir` in `pkg/cli/verify.go`:
+- [x] update `scopePoolDir` in `pkg/cli/verify.go`:
       `(distro,suite)` → `<distro>/pool/<suite>`,
       `(distro,"")`   → `<distro>/pool`,
       `("","")`       → caller iterates over `EnumerateDistros` result
-- [ ] in unscoped mode, loop over distros and call `scanOrphans` for each
+- [x] in unscoped mode, loop over distros and call `scanOrphans` for each
       with the new per-distro pool root, all under the same writer-lock
       scope as the row enumeration
-- [ ] sweep `poolDirName` constant usage (line 48); rename or document as
+- [x] sweep `poolDirName` constant usage (line 48); rename or document as
       "the literal `pool` segment under each distro" so a future reader
       isn't misled by the old "top-level pool dir" intent
-- [ ] decide on the form of `MissingPool` / `Mismatches` / orphan report
+- [x] decide on the form of `MissingPool` / `Mismatches` / orphan report
       strings — keep apt-relative `Filename` for missing/mismatch (they
       come from rows, no distro prefix needed when a single-distro repo
       is the common case **and** the report already prefixes with `distro`
@@ -294,13 +294,13 @@ disk-relative paths: `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`.
       paths for orphans (they're walked from the filesystem and the
       distro is meaningful context). If the user-facing output changes,
       update `verify_test.go` golden output accordingly
-- [ ] add a test in `queries_test.go` for `EnumerateDistros` (empty DB,
+- [x] add a test in `queries_test.go` for `EnumerateDistros` (empty DB,
       multi-distro DB, sorted ascending)
-- [ ] update `verify_test.go` orphan-scan fixtures: orphans now live at
+- [x] update `verify_test.go` orphan-scan fixtures: orphans now live at
       `<root>/<distro>/pool/...` instead of `<root>/pool/<distro>/...`
-- [ ] add a regression case: unscoped verify across two distros finds
+- [x] add a regression case: unscoped verify across two distros finds
       orphans under both
-- [ ] run `go test ./pkg/repo/... ./pkg/cli/... -run
+- [x] run `go test ./pkg/repo/... ./pkg/cli/... -run
       'TestVerify|TestEnumerate'` — must pass before next task
 
 ### Task 5: Trim init
@@ -309,12 +309,12 @@ disk-relative paths: `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`.
 - Modify: `pkg/cli/init.go`
 - Modify: `pkg/cli/init_test.go`
 
-- [ ] drop the `for _, sub := range []string{"pool", "dists"}` mkdir loop
+- [x] drop the `for _, sub := range []string{"pool", "dists"}` mkdir loop
       from `pkg/cli/init.go:83`
-- [ ] update `init_test.go` to assert the post-init layout is just
+- [x] update `init_test.go` to assert the post-init layout is just
       `repo.db` + `config.yaml` at the root, no top-level `pool/` or
       `dists/`
-- [ ] run `go test ./pkg/cli/... -run 'TestInit'` — must pass before next
+- [x] run `go test ./pkg/cli/... -run 'TestInit'` — must pass before next
       task
 
 ### Task 6: Confirm distro name validation
@@ -325,31 +325,37 @@ disk-relative paths: `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`.
 - Modify (if needed): `pkg/cli/*_test.go` to add a path-traversal-via-distro
   case
 
-- [ ] grep every call site that passes `cmd.Distro` into a path. For each,
+- [x] grep every call site that passes `cmd.Distro` into a path. For each,
       confirm it goes through `validateScopeName("distro", cmd.Distro)`
       first
-- [ ] if any call site is missing the check, add it
-- [ ] add a regression test that passes `--distro ../etc` (and similar
+- [x] if any call site is missing the check, add it (none missing — `add`,
+      `delete`, `info`, `publish`, `verify` already gate `cmd.Distro`;
+      `list` and `search` only feed it into a DB filter so no path
+      validation needed)
+- [x] add a regression test that passes `--distro ../etc` (and similar
       traversal attempts) into `add`, `publish`, `verify` and asserts
       usage-error exit
-- [ ] run `go test ./pkg/cli/...` — must pass before next task
+- [x] run `go test ./pkg/cli/...` — must pass before next task (non-
+      integration CLI suite green; `TestIntegration_*` failures are
+      pre-existing per Task 7)
 
 ### Task 7: Update integration test
 
 **Files:**
 - Modify: `pkg/cli/integration_test.go`
 
-- [ ] replace every on-disk path assertion that references
+- [x] replace every on-disk path assertion that references
       `<root>/dists/<distro>/<suite>` with `<root>/<distro>/dists/<suite>`
-- [ ] replace every reference to `<root>/pool/<distro>/<suite>` with
+- [x] replace every reference to `<root>/pool/<distro>/<suite>` with
       `<root>/<distro>/pool/<suite>`
-- [ ] update assertions that read `Packages` files: `Filename:` lines no
+- [x] update assertions that read `Packages` files: `Filename:` lines no
       longer contain `<distro>`
-- [ ] keep / strengthen the no-cross-suite-dedup assertion (same NVRA in
+- [x] keep / strengthen the no-cross-suite-dedup assertion (same NVRA in
       two suites of one distro → two distinct disk files)
-- [ ] add an assertion that two distros publishing the same suite name
+- [x] add an assertion that two distros publishing the same suite name
       end up with two independent `<distro>/dists/<suite>` trees
-- [ ] run `go test ./pkg/cli/... -run 'TestIntegration'` — must pass
+      (added `TestIntegration_CrossDistroSameSuite`)
+- [x] run `go test ./pkg/cli/... -run 'TestIntegration'` — must pass
       before next task
 
 ### Task 8: Update Packages index test
@@ -357,24 +363,24 @@ disk-relative paths: `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`.
 **Files:**
 - Modify: `pkg/index/packages_test.go`
 
-- [ ] update the `Filename:` strings in the expected stanzas — drop the
+- [x] update the `Filename:` strings in the expected stanzas — drop the
       `<distro>` segment so they read `pool/<suite>/<comp>/...`
-- [ ] no production code changes here; the index writer already emits
+- [x] no production code changes here; the index writer already emits
       `p.Filename` verbatim
-- [ ] run `go test ./pkg/index/...` — must pass before next task
+- [x] run `go test ./pkg/index/...` — must pass before next task
 
 ### Task 9: Update repo queries fixture
 
 **Files:**
 - Modify: `pkg/repo/queries_test.go`
 
-- [ ] update the `Filename: fmt.Sprintf("pool/%s/%s/...", distro, suite,
+- [x] update the `Filename: fmt.Sprintf("pool/%s/%s/...", distro, suite,
       ...)` helper to drop the `distro` segment so synthetic rows match
       the new format
-- [ ] confirm no test asserts that the literal `<distro>` substring
+- [x] confirm no test asserts that the literal `<distro>` substring
       appears inside `Filename` (a regression-friendly check now that the
       column meaning has changed)
-- [ ] run `go test ./pkg/repo/...` — must pass before next task
+- [x] run `go test ./pkg/repo/...` — must pass before next task
 
 ### Task 10: Update README and usage docs
 
@@ -382,35 +388,42 @@ disk-relative paths: `known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}`.
 - Modify: `README.md`
 - Modify: `docs/usage.md`
 
-- [ ] in `README.md` "Consuming the repo with apt" — change the example
+- [x] in `README.md` "Consuming the repo with apt" — change the example
       sources line so URI ends in `/<distro>` and `Suites:` is plain
       `<suite>` (modern deb822 form already used in the user's bug
       report); show the matching one-line legacy form too
-- [ ] in `docs/usage.md` "On-disk layout" — redraw the tree to put
+- [x] in `docs/usage.md` "On-disk layout" — redraw the tree to put
       `<distro>` outside `dists/` and `pool/`
-- [ ] update the description of `Pool isolated per (distro, suite)` to
+- [x] update the description of `Pool isolated per (distro, suite)` to
       reflect the new path shape (the *isolation* property is unchanged,
       only the path)
-- [ ] no CLI surface change; quickstart commands stay as-is
+- [x] no CLI surface change; quickstart commands stay as-is (only the
+      rsync target path in step 5 of the quickstart block was updated to
+      reflect the new per-distro tree)
 
 ### Task 11: Verify acceptance criteria
 
-- [ ] verify `apt-get update` against a freshly published repo works with
-      `URI=.../<distro>`, `Suites: <suite>`, `Components: <comp>` (post-
-      completion manual step — see below)
-- [ ] verify `make test` is green end-to-end
-- [ ] verify `make lint` is green
-- [ ] verify `make race` is green
-- [ ] verify two distros sharing a suite name (`debian/trixie` +
+- [x] verify `apt-get update` against a freshly published repo works with
+      `URI=.../<distro>`, `Suites: <suite>`, `Components: <comp>` (skipped —
+      manual post-completion step, see below)
+- [x] verify `make test` is green end-to-end (passes; total coverage 80.3%)
+- [x] verify `make lint` is green (clean after fixing wrapcheck in
+      `pkg/cli/root_test.go` snapshotRoot helper)
+- [x] verify `make race` is green (all packages pass with `-race`)
+- [x] verify two distros sharing a suite name (`debian/trixie` +
       `ubuntu/trixie`) round-trip through `add` → `publish` → `verify`
-      independently
-- [ ] verify `verify --gc` removes orphans under each per-distro
-      `<distro>/pool/`
+      independently (covered by `TestIntegration_CrossDistroSameSuite` in
+      `pkg/cli/integration_test.go:230`)
+- [x] verify `verify --gc` removes orphans under each per-distro
+      `<distro>/pool/` (covered by
+      `TestVerifyUnscopedAcrossDistrosFindsOrphans` in
+      `pkg/cli/verify_test.go:281`)
 
 ### Task 12: [Final] Move plan to completed
 
-- [ ] update `CLAUDE.md` only if a new gotcha emerged (otherwise leave it)
-- [ ] move this plan: `mv docs/plans/20260427-per-distro-layout.md
+- [x] update `CLAUDE.md` only if a new gotcha emerged (otherwise leave it —
+      no new gotcha emerged from this work)
+- [x] move this plan: `mv docs/plans/20260427-per-distro-layout.md
       docs/plans/completed/`
 
 ## Post-Completion

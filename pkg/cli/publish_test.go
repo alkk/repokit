@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/netxms/debrepo/pkg/pool"
 	"github.com/netxms/debrepo/pkg/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,10 +49,8 @@ func fakePackage(t *testing.T, root, distro, suite, arch, name, version string) 
 	t.Helper()
 	const component = "main"
 	body := []byte("fake .deb body for " + name + "_" + version + "_" + arch)
-	rel := filepath.ToSlash(filepath.Join(
-		"pool", distro, suite, component, name[:1], name,
-		name+"_"+version+"_"+arch+".deb"))
-	full := filepath.Join(root, filepath.FromSlash(rel))
+	filename := pool.Filename(suite, component, name, name, version, arch)
+	full := filepath.Join(root, filepath.FromSlash(pool.DiskPath(distro, filename)))
 	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
 	require.NoError(t, os.WriteFile(full, body, 0o644))
 
@@ -68,7 +67,7 @@ func fakePackage(t *testing.T, root, distro, suite, arch, name, version string) 
 		Architecture: arch,
 		Name:         name,
 		Version:      version,
-		Filename:     rel,
+		Filename:     filename,
 		Size:         int64(len(body)),
 		MD5:          hashHex(md5.New(), body),
 		SHA1:         hashHex(sha1.New(), body),
@@ -94,7 +93,7 @@ func TestPublishEmptySuite(t *testing.T) {
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	releasePath := filepath.Join(root, "dists", "debian", "bookworm", "Release")
+	releasePath := filepath.Join(root, "debian", "dists", "bookworm", "Release")
 	body, err := os.ReadFile(releasePath)
 	require.NoError(t, err)
 	out := string(body)
@@ -109,10 +108,10 @@ func TestPublishEmptySuite(t *testing.T) {
 			"empty-suite Release should have no checksum entries: %q", line)
 	}
 
-	assert.FileExists(t, filepath.Join(root, "dists", "debian", "bookworm", "InRelease"))
-	assert.FileExists(t, filepath.Join(root, "dists", "debian", "bookworm", "Release.gpg"))
-	assert.NoDirExists(t, filepath.Join(root, "dists", "debian", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "dists", "debian", "bookworm.old"))
+	assert.FileExists(t, filepath.Join(root, "debian", "dists", "bookworm", "InRelease"))
+	assert.FileExists(t, filepath.Join(root, "debian", "dists", "bookworm", "Release.gpg"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
 }
 
 func TestPublishMultiArch(t *testing.T) {
@@ -130,10 +129,10 @@ func TestPublishMultiArch(t *testing.T) {
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	dists := filepath.Join(root, "dists", "debian", "bookworm")
+	dists := filepath.Join(root, "debian", "dists", "bookworm")
 
 	assert.NoDirExists(t, filepath.Join(dists, "..", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "dists", "debian", "binary-all"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "binary-all"))
 
 	for _, arch := range []string{"amd64", "arm64"} {
 		dir := filepath.Join(dists, "main", "binary-"+arch)
@@ -178,7 +177,7 @@ func TestPublishRejectsArchAllOnlySuite(t *testing.T) {
 	assert.Contains(t, stderr.String(), "arch=all")
 	assert.Contains(t, stderr.String(), "concrete-architecture")
 
-	assert.NoDirExists(t, filepath.Join(root, "dists", "debian", "bookworm"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm"))
 }
 
 func TestPublishMissingDistroOrSuite(t *testing.T) {
@@ -217,8 +216,8 @@ func TestPublishAllScopesWhenBothEmpty(t *testing.T) {
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 2 suite(s)")
 
-	assert.FileExists(t, filepath.Join(root, "dists", "debian", "bookworm", "Release"))
-	assert.FileExists(t, filepath.Join(root, "dists", "ubuntu", "noble", "Release"))
+	assert.FileExists(t, filepath.Join(root, "debian", "dists", "bookworm", "Release"))
+	assert.FileExists(t, filepath.Join(root, "ubuntu", "dists", "noble", "Release"))
 }
 
 // TestPublishAllScopesIncludesEmptiedSuites guards against `debrepo publish`
@@ -236,7 +235,7 @@ func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
 	code := Run(args, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
 
-	pkgPath := filepath.Join(root, "dists", "debian", "bookworm", "main", "binary-amd64", "Packages")
+	pkgPath := filepath.Join(root, "debian", "dists", "bookworm", "main", "binary-amd64", "Packages")
 	body, err := os.ReadFile(pkgPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "Package: alpha\n")
@@ -263,7 +262,7 @@ func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
 	assert.NoFileExists(t, pkgPath,
 		"binary-arch tree should be wiped when the suite has no packages")
 
-	releaseBody, err := os.ReadFile(filepath.Join(root, "dists", "debian", "bookworm", "Release"))
+	releaseBody, err := os.ReadFile(filepath.Join(root, "debian", "dists", "bookworm", "Release"))
 	require.NoError(t, err)
 	out := string(releaseBody)
 	assert.Contains(t, out, "Architectures: \n")
@@ -278,7 +277,7 @@ func TestPublishAllScopesIgnoresStrayDirsWithoutRelease(t *testing.T) {
 	root := t.TempDir()
 	initRepoForTest(t, root)
 
-	stray := filepath.Join(root, "dists", "debian", "notes")
+	stray := filepath.Join(root, "debian", "dists", "notes")
 	require.NoError(t, os.MkdirAll(stray, 0o755))
 	strayFile := filepath.Join(stray, "readme.txt")
 	require.NoError(t, os.WriteFile(strayFile, []byte("not managed by debrepo\n"), 0o600))
@@ -311,15 +310,15 @@ func TestPublishAtomicSwapReplacesLive(t *testing.T) {
 	code = Run(args, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "second publish: %s", stderr.String())
 
-	body, err := os.ReadFile(filepath.Join(root, "dists", "debian", "bookworm",
+	body, err := os.ReadFile(filepath.Join(root, "debian", "dists", "bookworm",
 		"main", "binary-amd64", "Packages"))
 	require.NoError(t, err)
 	txt := string(body)
 	assert.Contains(t, txt, "Version: 1.0\n")
 	assert.Contains(t, txt, "Version: 2.0\n")
 
-	assert.NoDirExists(t, filepath.Join(root, "dists", "debian", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "dists", "debian", "bookworm.old"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
 }
 
 // TestPublishCleansStaleStagingDirs ensures publish wipes any leftover
@@ -341,7 +340,7 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 			initRepoForTest(t, root)
 			insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
-			distsParent := filepath.Join(root, "dists", "debian")
+			distsParent := filepath.Join(root, "debian", "dists")
 			require.NoError(t, os.MkdirAll(distsParent, 0o755))
 			newPath := filepath.Join(distsParent, "bookworm.new")
 			oldPath := filepath.Join(distsParent, "bookworm.old")
@@ -384,7 +383,7 @@ func TestPublishGzAndXzMatchPlain(t *testing.T) {
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	dir := filepath.Join(root, "dists", "debian", "bookworm", "main", "binary-amd64")
+	dir := filepath.Join(root, "debian", "dists", "bookworm", "main", "binary-amd64")
 	plain, err := os.ReadFile(filepath.Join(dir, "Packages"))
 	require.NoError(t, err)
 
@@ -415,7 +414,7 @@ func TestPublishAllScopesSkipsInvalidDiscoveredScopeNames(t *testing.T) {
 	root := t.TempDir()
 	initRepoForTest(t, root)
 
-	stray := filepath.Join(root, "dists", "debian", "-evil")
+	stray := filepath.Join(root, "debian", "dists", "-evil")
 	require.NoError(t, os.MkdirAll(stray, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stray, "Release"), []byte("Origin: forged\n"), 0o644))
 
@@ -467,13 +466,13 @@ func TestPublishAllScopesSkipsInvalidDBScopeNames(t *testing.T) {
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 1 suite(s)")
 
-	assert.DirExists(t, filepath.Join(root, "dists", "debian", "bookworm"))
+	assert.DirExists(t, filepath.Join(root, "debian", "dists", "bookworm"))
 	// Without the dbScopes filter, publishScope on (debian, "..") would
-	// resolve livePath to root/dists, leaving sibling staging dirs like
-	// root/dists.new and root/dists.old as evidence; their absence proves
+	// resolve livePath to root/debian, leaving sibling staging dirs like
+	// root/debian.new and root/debian.old as evidence; their absence proves
 	// the bad row never reached the swap logic.
-	assert.NoDirExists(t, filepath.Join(root, "dists.new"))
-	assert.NoDirExists(t, filepath.Join(root, "dists.old"))
+	assert.NoDirExists(t, filepath.Join(root, "debian.new"))
+	assert.NoDirExists(t, filepath.Join(root, "debian.old"))
 }
 
 // TestSwapDistsRestoresLiveOnPromoteFailure ensures that when the .new → live
@@ -483,7 +482,7 @@ func TestPublishAllScopesSkipsInvalidDBScopeNames(t *testing.T) {
 // permanently lost.
 func TestSwapDistsRestoresLiveOnPromoteFailure(t *testing.T) {
 	root := t.TempDir()
-	distsParent := filepath.Join(root, "dists", "debian")
+	distsParent := filepath.Join(root, "debian", "dists")
 	live := filepath.Join(distsParent, "bookworm")
 	old := live + suiteSuffixOld
 	require.NoError(t, os.MkdirAll(live, 0o755))

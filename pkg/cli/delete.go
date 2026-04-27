@@ -135,7 +135,7 @@ func (cmd *DeleteCmd) runDelete(ctx context.Context, c *Context, r *repo.Repo, f
 		}
 		deleted = rows
 		for i, p := range deleted {
-			if err := pool.Delete(c.Root, p.Filename); err != nil {
+			if err := pool.Delete(c.Root, pool.DiskPath(p.Distro, p.Filename)); err != nil {
 				poolErr = err
 				poolErrIdx = i
 				//nolint:nilerr // intentional: keep the DB delete committed so partial pool failures leave only orphans (recoverable via verify --gc), not rows pointing at missing files

@@ -44,16 +44,17 @@ func fileSHA256(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// listPoolFiles returns every regular file under <root>/pool/ as a sorted
-// slice of pool-relative paths (forward-slashed).
+// listPoolFiles returns every .deb file beneath any per-distro pool tree as a
+// slice of repo-root-relative paths (forward-slashed). Walks the whole root so
+// it catches files under <root>/<distro>/pool/... regardless of distro.
 func listPoolFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
-	err := filepath.WalkDir(filepath.Join(root, "pool"), func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".deb") {
 			return nil
 		}
 		rel, rerr := filepath.Rel(root, p)
@@ -91,9 +92,10 @@ func TestAddSinglePackage(t *testing.T) {
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	wantRel := "pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
-	assert.FileExists(t, filepath.Join(root, filepath.FromSlash(wantRel)))
-	assert.Equal(t, fileSHA256(t, deb), fileSHA256(t, filepath.Join(root, filepath.FromSlash(wantRel))),
+	wantFilename := "pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
+	wantDisk := "debian/" + wantFilename
+	assert.FileExists(t, filepath.Join(root, filepath.FromSlash(wantDisk)))
+	assert.Equal(t, fileSHA256(t, deb), fileSHA256(t, filepath.Join(root, filepath.FromSlash(wantDisk))),
 		"pool file should be a byte-identical copy of the source")
 
 	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
@@ -110,7 +112,7 @@ func TestAddSinglePackage(t *testing.T) {
 	assert.Equal(t, "amd64", got.Architecture)
 	assert.Equal(t, "hello-gz", got.Name)
 	assert.Equal(t, "1.0", got.Version)
-	assert.Equal(t, wantRel, got.Filename)
+	assert.Equal(t, wantFilename, got.Filename)
 	assert.Equal(t, fileSHA256(t, deb), got.SHA256)
 	assert.Contains(t, got.Control, "Package: hello-gz")
 	assert.True(t, strings.HasSuffix(got.Control, "\n"), "stored control must end with a single newline")
@@ -137,9 +139,9 @@ func TestAddMultiplePackages(t *testing.T) {
 
 	pool := listPoolFiles(t, root)
 	assert.ElementsMatch(t, []string{
-		"pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb",
-		"pool/debian/bookworm/main/h/hello/hello-xz_1.0_amd64.deb",
-		"pool/debian/bookworm/main/f/foo/hello-zst_1.0_amd64.deb",
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb",
+		"debian/pool/bookworm/main/h/hello/hello-xz_1.0_amd64.deb",
+		"debian/pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb",
 	}, pool)
 
 	assert.Equal(t, 3, rowCount(t, root))
@@ -166,7 +168,7 @@ func TestAddDuplicateWithoutReplace(t *testing.T) {
 
 	assert.Equal(t, 1, rowCount(t, root), "DB row count should be unchanged after duplicate add")
 	assert.FileExists(t, filepath.Join(root, filepath.FromSlash(
-		"pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")))
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")))
 }
 
 func TestAddReplaceOverwrites(t *testing.T) {
@@ -179,8 +181,8 @@ func TestAddReplaceOverwrites(t *testing.T) {
 	// actually overwrite for the post-condition to hold. Re-adding the same
 	// fixture would tautologically pass even if --replace silently became a no-op.
 	const placeholderSHA256 = "1111111111111111111111111111111111111111111111111111111111111111"
-	rel := "pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
-	pre := filepath.Join(root, filepath.FromSlash(rel))
+	filename := "pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
+	pre := filepath.Join(root, "debian", filepath.FromSlash(filename))
 	require.NoError(t, os.MkdirAll(filepath.Dir(pre), 0o755))
 	require.NoError(t, os.WriteFile(pre, []byte("stale-bytes"), 0o644))
 	insertPackage(t, root, repo.Package{
@@ -190,7 +192,7 @@ func TestAddReplaceOverwrites(t *testing.T) {
 		Architecture: "amd64",
 		Name:         "hello-gz",
 		Version:      "1.0",
-		Filename:     rel,
+		Filename:     filename,
 		Size:         11,
 		MD5:          "00000000000000000000000000000000",
 		SHA1:         "0000000000000000000000000000000000000000",
@@ -378,7 +380,7 @@ func TestAddReplaceSweepsOldPoolFileOnSourceChange(t *testing.T) {
 	deb := fixtureDeb(t, "hello-zst_1.0_amd64.deb") // Source: foo → shard f/foo
 
 	stalePool := filepath.Join(root, filepath.FromSlash(
-		"pool/debian/bookworm/main/w/wrong-source/hello-zst_1.0_amd64.deb"))
+		"debian/pool/bookworm/main/w/wrong-source/hello-zst_1.0_amd64.deb"))
 	require.NoError(t, os.MkdirAll(filepath.Dir(stalePool), 0o755))
 	require.NoError(t, os.WriteFile(stalePool, []byte("stale-shard"), 0o644))
 
@@ -389,7 +391,7 @@ func TestAddReplaceSweepsOldPoolFileOnSourceChange(t *testing.T) {
 		Architecture: "amd64",
 		Name:         "hello-zst",
 		Version:      "1.0",
-		Filename:     "pool/debian/bookworm/main/w/wrong-source/hello-zst_1.0_amd64.deb",
+		Filename:     "pool/bookworm/main/w/wrong-source/hello-zst_1.0_amd64.deb",
 		Size:         11,
 		MD5:          "00000000000000000000000000000000",
 		SHA1:         "0000000000000000000000000000000000000000",
@@ -408,7 +410,7 @@ func TestAddReplaceSweepsOldPoolFileOnSourceChange(t *testing.T) {
 
 	assert.NoFileExists(t, stalePool, "old pool file at prior shard must be removed")
 	assert.FileExists(t, filepath.Join(root, filepath.FromSlash(
-		"pool/debian/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")),
+		"debian/pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")),
 		"new pool file must exist at the canonical Source-derived shard")
 	assert.Equal(t, 1, rowCount(t, root), "DB must hold exactly one row after replace")
 }
@@ -426,8 +428,8 @@ func TestAddReplaceClearsStaleBackup(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 	addOnce(t, root, deb)
 
-	rel := "pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
-	dest := filepath.Join(root, filepath.FromSlash(rel))
+	dest := filepath.Join(root, filepath.FromSlash(
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
 	require.NoError(t, os.WriteFile(dest+".bak", []byte("stale-prev-version"), 0o644))
 
 	var stdout, stderr bytes.Buffer
@@ -462,8 +464,8 @@ func TestAddReplaceRestoresUncommittedDestAfterCrash(t *testing.T) {
 	addOnce(t, root, deb)
 	realSHA := fileSHA256(t, deb)
 
-	rel := "pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
-	dest := filepath.Join(root, filepath.FromSlash(rel))
+	dest := filepath.Join(root, filepath.FromSlash(
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
 	require.NoError(t, os.Rename(dest, dest+".bak"))
 	require.NoError(t, os.WriteFile(dest, []byte("uncommitted-from-crashed-replace"), 0o644))
 

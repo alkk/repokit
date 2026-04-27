@@ -1,6 +1,16 @@
-// Package pool manages the on-disk physical .deb files under <root>/pool/.
-// Paths returned and accepted by this package use forward slashes regardless
-// of OS — they are repo-relative and serialized verbatim into Packages files.
+// Package pool manages the on-disk physical .deb files for an apt repo.
+// Paths use forward slashes regardless of OS. Two distinct path forms cross
+// this boundary:
+//
+//   - Filename — apt-relative path, stored in the DB and serialized verbatim
+//     into Packages files. Form: pool/<suite>/<comp>/<letter>/<src>/<file>.deb.
+//     Resolved by clients against URI=<root>/<distro>, so it has no
+//     leading <distro> segment.
+//   - DiskPath — repo-root-relative path used for filesystem I/O. Form:
+//     <distro>/<filename>. The full filesystem path is
+//     filepath.Join(root, FromSlash(diskPath)). Helpers in this package
+//     (Write, SafeJoin, ReconcileBackup, ...) accept this disk-relative
+//     form and perform the join internally.
 package pool
 
 import (
@@ -17,16 +27,30 @@ import (
 // poolDir is the top-level directory under the repo root holding physical .debs.
 const poolDir = "pool"
 
-// Path returns the repo-relative pool path for a .deb identified by its
-// coordinates. Source falls back to name when empty. Names beginning with
-// "lib" are sharded under "lib<second-letter>" per Debian convention; all
-// other names use the lowercased first letter as shard.
-func Path(distro, suite, component, source, name, version, arch string) string {
+// Filename returns the apt-relative pool path for a .deb identified by its
+// coordinates. The returned string is what gets stored in the DB and emitted
+// verbatim in Packages files; clients resolve it against URI=<root>/<distro>,
+// so it carries no leading <distro> segment. Source falls back to name when
+// empty. Names beginning with "lib" are sharded under "lib<second-letter>"
+// per Debian convention; all other names use the lowercased first letter as
+// shard.
+func Filename(suite, component, source, name, version, arch string) string {
 	if source == "" {
 		source = name
 	}
 	filename := fmt.Sprintf("%s_%s_%s.deb", name, version, arch)
-	return path.Join(poolDir, distro, suite, component, shardLetter(source), source, filename)
+	return path.Join(poolDir, suite, component, shardLetter(source), source, filename)
+}
+
+// DiskPath composes the repo-root-relative disk path for a pool file by
+// prefixing filename (the apt-relative form returned by Filename) with the
+// distro segment. Use the result as relPath for Write, Replace, Delete,
+// SafeJoin, ReconcileBackup, etc. The two arguments are concatenated
+// verbatim (no path.Clean) so that any `..` segment in a corrupted
+// filename survives into SafeJoin, which rejects it instead of silently
+// reaching into another distro or repo root.
+func DiskPath(distro, filename string) string {
+	return distro + "/" + filename
 }
 
 // shardLetter returns the pool sub-directory shard for a source name.
@@ -118,8 +142,15 @@ func Delete(root, relPath string) error {
 // rejecting inputs whose resolved path escapes root via `..` segments or
 // absolute components. Pool-relative paths are stored in the DB and walked
 // from disk; this helper is the choke point for ensuring any such path is
-// kept under <root>/ before opening or deleting it.
+// kept under <root>/ before opening or deleting it. Any `..` segment in
+// relPath is rejected up front — without this, a corrupted DB row whose
+// filename contains a `..` could, after prefixing with <distro>, resolve
+// to a sibling distro tree or to repo-root metadata (config.yaml,
+// repo.db) instead of escaping <root> outright.
 func SafeJoin(root, relPath string) (string, error) {
+	if hasParentSegment(relPath) {
+		return "", fmt.Errorf("path %q contains parent (..) segment", relPath)
+	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("abs %s: %w", root, err)
@@ -130,6 +161,18 @@ func SafeJoin(root, relPath string) (string, error) {
 		return "", fmt.Errorf("path %q escapes repo root", relPath)
 	}
 	return dest, nil
+}
+
+// hasParentSegment reports whether p contains a `..` path segment under
+// either slash convention. A literal `..` substring inside a filename
+// component (e.g. "foo..bar.deb") is allowed; only `..` flanked by path
+// separators or at the start/end of the path is treated as traversal.
+func hasParentSegment(p string) bool {
+	p = strings.ReplaceAll(p, "\\", "/")
+	if p == ".." || strings.HasPrefix(p, "../") || strings.HasSuffix(p, "/..") {
+		return true
+	}
+	return strings.Contains(p, "/../")
 }
 
 // FsyncDir flushes the directory entry at dir so a prior rename is durable

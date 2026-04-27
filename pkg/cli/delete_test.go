@@ -80,9 +80,9 @@ func TestDeleteByNameAndVersion(t *testing.T) {
 
 	assert.Equal(t, 1, rowCount(t, root))
 	assert.Equal(t, 1, poolFileCount(t, root))
-	assert.NoFileExists(t, filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	assert.NoFileExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb"))
-	assert.FileExists(t, filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello",
+	assert.FileExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello",
 		"hello-xz_1.0_amd64.deb"))
 }
 
@@ -212,9 +212,9 @@ func TestDeleteScopedToSuite(t *testing.T) {
 
 	assert.Equal(t, 1, rowCount(t, root))
 	assert.Equal(t, 1, poolFileCount(t, root))
-	assert.NoFileExists(t, filepath.Join(root, "pool", "debian", "bookworm", "main", "h", "hello-gz",
+	assert.NoFileExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb"))
-	assert.FileExists(t, filepath.Join(root, "pool", "debian", "bullseye", "main", "h", "hello-gz",
+	assert.FileExists(t, filepath.Join(root, "debian", "pool", "bullseye", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb"))
 }
 

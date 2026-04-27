@@ -20,9 +20,8 @@ func TestInitFreshDir(t *testing.T) {
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
 	for _, sub := range []string{"pool", "dists"} {
-		info, err := os.Stat(filepath.Join(root, sub))
-		require.NoError(t, err, "missing %s/", sub)
-		assert.True(t, info.IsDir(), "%s/ should be a directory", sub)
+		_, err := os.Stat(filepath.Join(root, sub))
+		assert.True(t, os.IsNotExist(err), "%s/ should not exist after init", sub)
 	}
 	dbInfo, err := os.Stat(filepath.Join(root, dbFilename))
 	require.NoError(t, err)
@@ -33,6 +32,15 @@ func TestInitFreshDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "REPLACE_ME", cfg.SigningKey)
 	assert.Empty(t, cfg.Suites)
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.ElementsMatch(t, []string{dbFilename, "config.yaml"}, names,
+		"init should leave only repo.db and config.yaml at the root")
 
 	assert.Contains(t, stdout.String(), "initialized repo at")
 }

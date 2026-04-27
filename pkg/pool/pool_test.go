@@ -11,10 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPath(t *testing.T) {
+func TestFilename(t *testing.T) {
 	tests := []struct {
 		name    string
-		distro  string
 		suite   string
 		comp    string
 		source  string
@@ -24,67 +23,93 @@ func TestPath(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "regular package uses first letter of source",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "regular package uses first letter of source",
+			suite: "bookworm", comp: "main",
 			source: "hello", pkgName: "hello", version: "1.0", arch: "amd64",
-			want: "pool/debian/bookworm/main/h/hello/hello_1.0_amd64.deb",
+			want: "pool/bookworm/main/h/hello/hello_1.0_amd64.deb",
 		},
 		{
-			name:    "lib package uses libX shard",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "lib package uses libX shard",
+			suite: "bookworm", comp: "main",
 			source: "libfoo", pkgName: "libfoo", version: "1.0-1", arch: "amd64",
-			want: "pool/debian/bookworm/main/libf/libfoo/libfoo_1.0-1_amd64.deb",
+			want: "pool/bookworm/main/libf/libfoo/libfoo_1.0-1_amd64.deb",
 		},
 		{
-			name:    "libssl3 sharded under libs",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "libssl3 sharded under libs",
+			suite: "bookworm", comp: "main",
 			source: "libssl3", pkgName: "libssl3", version: "3.0", arch: "arm64",
-			want: "pool/debian/bookworm/main/libs/libssl3/libssl3_3.0_arm64.deb",
+			want: "pool/bookworm/main/libs/libssl3/libssl3_3.0_arm64.deb",
 		},
 		{
-			name:    "empty source falls back to package name",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "empty source falls back to package name",
+			suite: "bookworm", comp: "main",
 			source: "", pkgName: "hello", version: "1.0", arch: "amd64",
-			want: "pool/debian/bookworm/main/h/hello/hello_1.0_amd64.deb",
+			want: "pool/bookworm/main/h/hello/hello_1.0_amd64.deb",
 		},
 		{
-			name:    "binary name distinct from source uses source for shard and dir",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "binary name distinct from source uses source for shard and dir",
+			suite: "bookworm", comp: "main",
 			source: "hello", pkgName: "hello-doc", version: "1.0", arch: "all",
-			want: "pool/debian/bookworm/main/h/hello/hello-doc_1.0_all.deb",
+			want: "pool/bookworm/main/h/hello/hello-doc_1.0_all.deb",
 		},
 		{
-			name:    "mixed-case source lowercases shard but preserves dir",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "mixed-case source lowercases shard but preserves dir",
+			suite: "bookworm", comp: "main",
 			source: "Hello", pkgName: "Hello", version: "1.0", arch: "amd64",
-			want: "pool/debian/bookworm/main/h/Hello/Hello_1.0_amd64.deb",
+			want: "pool/bookworm/main/h/Hello/Hello_1.0_amd64.deb",
 		},
 		{
-			name:    "exactly-lib falls back to first letter",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "exactly-lib falls back to first letter",
+			suite: "bookworm", comp: "main",
 			source: "lib", pkgName: "lib", version: "1.0", arch: "amd64",
-			want: "pool/debian/bookworm/main/l/lib/lib_1.0_amd64.deb",
+			want: "pool/bookworm/main/l/lib/lib_1.0_amd64.deb",
 		},
 		{
-			name:    "non-default component and suite",
-			distro:  "ubuntu", suite: "noble", comp: "contrib",
+			name:  "non-default component and suite",
+			suite: "noble", comp: "contrib",
 			source: "zsh", pkgName: "zsh", version: "5.9", arch: "arm64",
-			want: "pool/ubuntu/noble/contrib/z/zsh/zsh_5.9_arm64.deb",
+			want: "pool/noble/contrib/z/zsh/zsh_5.9_arm64.deb",
 		},
 		{
-			name:    "empty source and name shards to _ instead of panicking",
-			distro:  "debian", suite: "bookworm", comp: "main",
+			name:  "empty source and name shards to _ instead of panicking",
+			suite: "bookworm", comp: "main",
 			source: "", pkgName: "", version: "1.0", arch: "amd64",
-			want: "pool/debian/bookworm/main/_/_1.0_amd64.deb",
+			want: "pool/bookworm/main/_/_1.0_amd64.deb",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Path(tt.distro, tt.suite, tt.comp, tt.source, tt.pkgName, tt.version, tt.arch)
+			got := Filename(tt.suite, tt.comp, tt.source, tt.pkgName, tt.version, tt.arch)
 			assert.Equal(t, tt.want, got)
 			assert.NotContains(t, got, "\\", "path must use forward slashes")
+			assert.NotContains(t, got, "debian/", "Filename must not carry a distro segment")
+			assert.NotContains(t, got, "ubuntu/", "Filename must not carry a distro segment")
 		})
 	}
+}
+
+func TestDiskPath(t *testing.T) {
+	filename := Filename("bookworm", "main", "hello", "hello", "1.0", "amd64")
+
+	t.Run("prefixes filename with distro", func(t *testing.T) {
+		assert.Equal(t,
+			"debian/pool/bookworm/main/h/hello/hello_1.0_amd64.deb",
+			DiskPath("debian", filename),
+		)
+	})
+
+	t.Run("different distros yield different disk paths", func(t *testing.T) {
+		debian := DiskPath("debian", filename)
+		ubuntu := DiskPath("ubuntu", filename)
+		assert.NotEqual(t, debian, ubuntu)
+		assert.True(t, strings.HasPrefix(debian, "debian/"))
+		assert.True(t, strings.HasPrefix(ubuntu, "ubuntu/"))
+	})
+
+	t.Run("uses forward slashes regardless of OS", func(t *testing.T) {
+		got := DiskPath("debian", filename)
+		assert.NotContains(t, got, "\\")
+	})
 }
 
 func TestWriteCreatesFile(t *testing.T) {
@@ -352,7 +377,7 @@ func TestDeleteRejectsPathTraversal(t *testing.T) {
 
 	err := Delete(root, "../"+filepath.Base(outside))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "escapes repo root")
+	assert.Contains(t, err.Error(), "..")
 	assert.FileExists(t, outside, "traversal target must not be removed")
 }
 
@@ -362,6 +387,35 @@ func TestSafeJoinRejectsTraversal(t *testing.T) {
 		_, err := SafeJoin(root, rel)
 		require.Error(t, err, "expected rejection for %q", rel)
 	}
+}
+
+// TestSafeJoinRejectsParentInsideRoot pins the defense against a corrupted
+// DB row whose filename, after prefixing with the distro segment, would
+// resolve to a sibling distro tree or repo-root metadata instead of
+// escaping <root> outright. Without the parent-segment check, SafeJoin
+// would silently accept paths that filepath.Clean collapses back inside
+// root.
+func TestSafeJoinRejectsParentInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"debian/../config.yaml", "debian/..", "a/../b"} {
+		_, err := SafeJoin(root, rel)
+		require.Error(t, err, "expected rejection for %q", rel)
+		assert.Contains(t, err.Error(), "..")
+	}
+}
+
+// TestDeleteRejectsCorruptedFilenameViaDiskPath covers the end-to-end
+// defense for finding 2 of the codex review: a corrupted packages.filename
+// like "../config.yaml" must be rejected by Delete, not silently rewritten
+// into a non-pool path under repo root.
+func TestDeleteRejectsCorruptedFilenameViaDiskPath(t *testing.T) {
+	root := t.TempDir()
+	sentinel := filepath.Join(root, "config.yaml")
+	require.NoError(t, os.WriteFile(sentinel, []byte("must survive"), 0o644))
+
+	err := Delete(root, DiskPath("debian", "../config.yaml"))
+	require.Error(t, err)
+	assert.FileExists(t, sentinel, "repo-root metadata must not be removed")
 }
 
 func TestWriteCleansTmpOnReaderError(t *testing.T) {

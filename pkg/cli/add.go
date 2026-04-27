@@ -72,11 +72,11 @@ func (cmd *AddCmd) run(c *Context) error {
 	var staleReplaced []string
 	txErr := r.Tx(ctx, func(tx *sql.Tx) error {
 		for _, p := range cmd.Args.Debs {
-			relPath, backup, stale, perr := cmd.processOne(ctx, c, r, tx, p)
+			diskPath, backup, stale, perr := cmd.processOne(ctx, c, r, tx, p)
 			if perr != nil {
 				return perr
 			}
-			written = append(written, relPath)
+			written = append(written, diskPath)
 			backups = append(backups, backup)
 			if stale != "" {
 				staleReplaced = append(staleReplaced, stale)
@@ -129,12 +129,13 @@ func (cmd *AddCmd) run(c *Context) error {
 // inspect the .deb, optionally evict the existing row in --replace mode,
 // insert the new row, then stream the bytes into the pool. Insert is run
 // before the pool write so a duplicate aborts the batch without touching the
-// filesystem. Returns the freshly written pool path so the caller can roll
-// it back on a later failure, the .bak path stashed by --replace (or "" in
-// Write mode) so the caller can finalize/restore it after the surrounding
-// transaction settles, and the prior pool path when --replace points at a
-// different shard than the new one (e.g. the .deb's Source field changed)
-// so the caller can sweep the orphan once the tx commits.
+// filesystem. Returns the disk-relative pool path of the freshly written
+// file so the caller can roll it back on a later failure, the .bak path
+// stashed by --replace (or "" in Write mode) so the caller can
+// finalize/restore it after the surrounding transaction settles, and the
+// prior file's disk-relative path when --replace points at a different
+// shard than the new one (e.g. the .deb's Source field changed) so the
+// caller can sweep the orphan once the tx commits.
 func (cmd *AddCmd) processOne(
 	ctx context.Context, c *Context, r *repo.Repo, tx *sql.Tx, srcPath string,
 ) (string, string, string, error) {
@@ -142,8 +143,9 @@ func (cmd *AddCmd) processOne(
 	if err != nil {
 		return "", "", "", fmt.Errorf("inspecting %s: %w", srcPath, err)
 	}
-	relPath := pool.Path(cmd.Distro, cmd.Suite, cmd.Component,
+	filename := pool.Filename(cmd.Suite, cmd.Component,
 		info.Source, info.Name, info.Version, info.Architecture)
+	diskPath := pool.DiskPath(cmd.Distro, filename)
 
 	pkg := repo.Package{
 		Distro:       cmd.Distro,
@@ -152,7 +154,7 @@ func (cmd *AddCmd) processOne(
 		Architecture: info.Architecture,
 		Name:         info.Name,
 		Version:      info.Version,
-		Filename:     relPath,
+		Filename:     filename,
 		Size:         info.Size,
 		MD5:          info.MD5,
 		SHA1:         info.SHA1,
@@ -172,8 +174,8 @@ func (cmd *AddCmd) processOne(
 				pkg.Name, pkg.Version, pkg.Architecture, derr)
 		}
 		for _, old := range oldRows {
-			if old.Filename != relPath {
-				stale = old.Filename
+			if old.Filename != filename {
+				stale = pool.DiskPath(cmd.Distro, old.Filename)
 				break
 			}
 		}
@@ -189,11 +191,11 @@ func (cmd *AddCmd) processOne(
 		return "", "", "", fmt.Errorf("inserting %s: %w", pkg.Name, ierr)
 	}
 
-	backup, werr := writePool(c.Root, relPath, srcPath, cmd.Replace)
+	backup, werr := writePool(c.Root, diskPath, srcPath, cmd.Replace)
 	if werr != nil {
 		return "", "", "", werr
 	}
-	return relPath, backup, stale, nil
+	return diskPath, backup, stale, nil
 }
 
 // reconcileBackup clears or restores a leftover <dest>.bak that survived a
@@ -212,15 +214,16 @@ func (cmd *AddCmd) reconcileBackup(ctx context.Context, c *Context, r *repo.Repo
 	if err != nil {
 		return fmt.Errorf("inspecting %s: %w", debPath, err)
 	}
-	relPath := pool.Path(cmd.Distro, cmd.Suite, cmd.Component,
+	filename := pool.Filename(cmd.Suite, cmd.Component,
 		info.Source, info.Name, info.Version, info.Architecture)
+	diskPath := pool.DiskPath(cmd.Distro, filename)
 
-	dest := filepath.Join(c.Root, filepath.FromSlash(relPath))
+	dest := filepath.Join(c.Root, filepath.FromSlash(diskPath))
 	if _, statErr := os.Lstat(dest + ".bak"); statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("stat %s.bak: %w", relPath, statErr)
+		return fmt.Errorf("stat %s.bak: %w", diskPath, statErr)
 	}
 
 	rows, err := r.List(ctx, repo.Filter{
@@ -232,18 +235,18 @@ func (cmd *AddCmd) reconcileBackup(ctx context.Context, c *Context, r *repo.Repo
 	}
 	committed := false
 	for _, row := range rows {
-		if row.Filename != relPath {
+		if row.Filename != filename {
 			continue
 		}
 		match, herr := destMatchesSHA256(dest, row.SHA256)
 		if herr != nil {
-			return fmt.Errorf("verifying %s: %w", relPath, herr)
+			return fmt.Errorf("verifying %s: %w", diskPath, herr)
 		}
 		committed = match
 		break
 	}
-	if err := pool.ReconcileBackup(c.Root, relPath, committed); err != nil {
-		return fmt.Errorf("reconciling backup for %s: %w", relPath, err)
+	if err := pool.ReconcileBackup(c.Root, diskPath, committed); err != nil {
+		return fmt.Errorf("reconciling backup for %s: %w", diskPath, err)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -158,5 +159,90 @@ func TestRequireScopeName(t *testing.T) {
 		require.NoError(t, requireScopeName("distro", "debian"))
 		require.Error(t, requireScopeName("suite", "etc/passwd"))
 	})
+}
+
+// TestDistroPathTraversalRejected guards every command that lets --distro
+// flow into a filesystem path. If a future change forgot the validateScopeName
+// gate, a malicious value like "../etc" would let publish or verify operate
+// on a directory outside the repo root. The test asserts non-zero exit and
+// that no per-distro tree was created at the traversal target.
+func TestDistroPathTraversalRejected(t *testing.T) {
+	traversals := []struct {
+		name   string
+		distro string
+	}{
+		{"dot-dot", ".."},
+		{"slash-injected", "../etc"},
+		{"backslash-injected", "..\\etc"},
+		{"leading-dot", ".hidden"},
+		{"newline-injected", "debian\nLabel: Forged"},
+	}
+
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	commands := []struct {
+		name string
+		args func(distro string) []string
+	}{
+		{
+			name: "add",
+			args: func(d string) []string {
+				return []string{"add", "--distro", d, "--suite", "bookworm", deb}
+			},
+		},
+		{
+			name: "publish",
+			args: func(d string) []string {
+				return []string{"publish", "--distro", d, "--suite", "bookworm", "--no-sign"}
+			},
+		},
+		{
+			name: "verify",
+			args: func(d string) []string {
+				return []string{"verify", "--distro", d}
+			},
+		},
+	}
+
+	for _, c := range commands {
+		for _, tc := range traversals {
+			t.Run(c.name+"/"+tc.name, func(t *testing.T) {
+				root := t.TempDir()
+				initRepoForTest(t, root)
+				before := snapshotRoot(t, root)
+
+				args := append([]string{"--repo", root}, c.args(tc.distro)...)
+				var stdout, stderr bytes.Buffer
+				code := Run(args, &stdout, &stderr, "test-rev")
+
+				require.NotEqualf(t, ExitOK, code, "expected non-zero exit; stderr=%s", stderr.String())
+				assert.Contains(t, stderr.String(), "--distro", "error should name the rejected flag")
+
+				after := snapshotRoot(t, root)
+				assert.Equal(t, before, after, "no filesystem mutation expected on a rejected --distro")
+			})
+		}
+	}
+}
+
+// snapshotRoot returns the sorted set of repo-root-relative paths under root.
+// Used by the traversal regression test to assert that a rejected --distro
+// run leaves the on-disk tree unchanged.
+func snapshotRoot(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.Walk(root, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr != nil {
+			return fmt.Errorf("computing relative path: %w", rerr)
+		}
+		out = append(out, rel)
+		return nil
+	})
+	require.NoError(t, err)
+	return out
 }
 

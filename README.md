@@ -1,7 +1,8 @@
 # debrepo
 
-Minimalistic Debian apt repository manager. Maintains a static `pool/` + `dists/`
-tree backed by SQLite, with explicit publish-and-sign and atomic dist swaps.
+Minimalistic Debian apt repository manager. Maintains static per-distro
+`<distro>/pool/` + `<distro>/dists/` trees backed by SQLite, with explicit
+publish-and-sign and atomic dist swaps.
 
 Hashes (md5/sha1/sha256/sha512) are computed once at `add` time and persisted in
 the database, so `publish` only re-emits them — unlike freight-style tools that
@@ -46,7 +47,7 @@ shows it before running `publish` without `--no-sign`.
 | `delete` | remove packages from a suite |
 | `list` | list packages matching filters |
 | `search` | substring search by name or description |
-| `publish` | rebuild and sign `dists/` for one or more suites |
+| `publish` | rebuild and sign `<distro>/dists/` for one or more suites |
 | `verify` | rehash pool files and (optionally) GC orphans |
 | `info` | inspect a `.deb` without touching the repo |
 
@@ -70,7 +71,7 @@ debrepo --repo /srv/apt add --distro debian --suite bookworm \
 debrepo --repo /srv/apt publish --distro debian --suite bookworm
 
 # 5. Rsync the static tree to the CDN (out of scope for debrepo)
-rsync -av /srv/apt/{pool,dists}/ deploy@cdn:/var/www/apt/
+rsync -av /srv/apt/debian/ deploy@cdn:/var/www/apt/debian/
 ```
 
 The repo root is resolved from `--repo` (or `-r`), then `$DEBREPO_ROOT`, then
@@ -80,18 +81,38 @@ the current working directory. Every command except `init` and `info` requires a
 ## Consuming the repo with apt
 
 On any client that should install from the repo, fetch and trust the public
-half of the signing key, then add a sources entry. For a repo published at
-`https://apt.example.com/`:
+half of the signing key, then add a sources entry. The URI must end in the
+distro segment (`/<distro>`) — apt resolves `dists/<suite>/Release` against
+that base, and on disk each distro is its own apt repo root.
+
+For a repo published at `https://apt.example.com/` containing the `debian`
+distro:
 
 ```sh
 # Trust the signing key (replace with your key fingerprint / file)
 sudo curl -fsSL https://apt.example.com/pubkey.asc \
     -o /etc/apt/keyrings/example.asc
+```
 
-# Add the source list
-echo "deb [signed-by=/etc/apt/keyrings/example.asc] https://apt.example.com bookworm main" \
-    | sudo tee /etc/apt/sources.list.d/example.list
+deb822 form (`/etc/apt/sources.list.d/example.sources`):
 
+```
+Types: deb
+URIs: https://apt.example.com/debian
+Suites: bookworm
+Components: main
+Signed-By: /etc/apt/keyrings/example.asc
+```
+
+Or the equivalent one-line legacy form (`/etc/apt/sources.list.d/example.list`):
+
+```
+deb [signed-by=/etc/apt/keyrings/example.asc] https://apt.example.com/debian bookworm main
+```
+
+Then:
+
+```sh
 sudo apt-get update
 sudo apt-get install hello
 ```

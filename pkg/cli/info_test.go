@@ -48,7 +48,8 @@ func TestInfoComputesPoolPathWhenScopeProvided(t *testing.T) {
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
-	assert.Contains(t, out, "Pool path:    pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
+	assert.Contains(t, out, "Pool path (apt):  pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
+	assert.Contains(t, out, "Pool path (disk): debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 }
 
 func TestInfoExposesParsedSource(t *testing.T) {
@@ -69,7 +70,8 @@ func TestInfoExposesParsedSource(t *testing.T) {
 
 	out := stdout.String()
 	assert.Contains(t, out, "Source:       foo")
-	assert.Contains(t, out, "Pool path:    pool/debian/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")
+	assert.Contains(t, out, "Pool path (apt):  pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")
+	assert.Contains(t, out, "Pool path (disk): debian/pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")
 }
 
 func TestInfoMissingFile(t *testing.T) {

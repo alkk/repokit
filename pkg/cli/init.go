@@ -80,11 +80,6 @@ func initRepo(root string) error {
 	case !errors.Is(err, os.ErrNotExist):
 		return fmt.Errorf("checking %s: %w", dbPath, err)
 	}
-	for _, sub := range []string{"pool", "dists"} {
-		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
-			return fmt.Errorf("creating %s/: %w", sub, err)
-		}
-	}
 	r, err := repo.Open(context.Background(), dbPath)
 	if err != nil {
 		return fmt.Errorf("opening db: %w", err)

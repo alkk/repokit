@@ -46,10 +46,10 @@ func TestIntegration_InitAddPublish(t *testing.T) {
 	runCmd("add", "--distro", "debian", "--suite", "bookworm", deb)
 	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
 
-	suiteDir := filepath.Join(root, "dists", "debian", "bookworm")
+	suiteDir := filepath.Join(root, "debian", "dists", "bookworm")
 	binDir := filepath.Join(suiteDir, "main", "binary-amd64")
 
-	poolFile := filepath.Join(root, "pool", "debian", "bookworm", "main",
+	poolFile := filepath.Join(root, "debian", "pool", "bookworm", "main",
 		"h", "hello-gz", "hello-gz_1.0_amd64.deb")
 	assert.FileExists(t, poolFile)
 
@@ -59,7 +59,7 @@ func TestIntegration_InitAddPublish(t *testing.T) {
 	stanzas := splitPackagesStanzas(pkgBody)
 	require.Len(t, stanzas, 1, "exactly one stanza expected")
 	assert.Contains(t, stanzas[0], "Package: hello-gz\n")
-	assert.Contains(t, stanzas[0], "Filename: pool/debian/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb\n")
+	assert.Contains(t, stanzas[0], "Filename: pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb\n")
 
 	releaseBody, err := os.ReadFile(filepath.Join(suiteDir, "Release"))
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	}
 
 	// extra version landed only in debian/bookworm/main/binary-amd64.
-	bookwormAmd64 := filepath.Join(root, "dists", "debian", "bookworm",
+	bookwormAmd64 := filepath.Join(root, "debian", "dists", "bookworm",
 		"main", "binary-amd64", "Packages")
 	stanzas := readStanzas(t, bookwormAmd64)
 	require.Len(t, stanzas, 3, "expected 1.0/amd64 + 2.0/amd64 + 1.0/all")
@@ -197,7 +197,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 
 	// debian/bookworm/main/binary-arm64 still has its 1.0 amd64-equivalent
 	// row (i.e., 1.0/arm64) and the 1.0/all row — delete was scoped to arch=amd64.
-	bookwormArm64 := filepath.Join(root, "dists", "debian", "bookworm",
+	bookwormArm64 := filepath.Join(root, "debian", "dists", "bookworm",
 		"main", "binary-arm64", "Packages")
 	armStanzas := readStanzas(t, bookwormArm64)
 	require.Len(t, armStanzas, 2)
@@ -205,7 +205,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	assert.True(t, hasStanza(armStanzas, pkgName, pkgVer, "all"))
 
 	// debian/bullseye/main/binary-amd64 untouched.
-	bullseyeAmd64 := filepath.Join(root, "dists", "debian", "bullseye",
+	bullseyeAmd64 := filepath.Join(root, "debian", "dists", "bullseye",
 		"main", "binary-amd64", "Packages")
 	bsStanzas := readStanzas(t, bullseyeAmd64)
 	require.Len(t, bsStanzas, 2)
@@ -213,13 +213,72 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	assert.True(t, hasStanza(bsStanzas, pkgName, pkgVer, "all"))
 
 	// pool file for the deleted row is gone; siblings remain.
-	deletedPool := filepath.Join(root, "pool", "debian", "bookworm", "main",
+	deletedPool := filepath.Join(root, "debian", "pool", "bookworm", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 	_, err := os.Stat(deletedPool)
 	require.ErrorIsf(t, err, fs.ErrNotExist, "deleted pool file should be gone (got err=%v)", err)
-	survivor := filepath.Join(root, "pool", "debian", "bullseye", "main",
+	survivor := filepath.Join(root, "debian", "pool", "bullseye", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 	assert.FileExists(t, survivor)
+}
+
+// TestIntegration_CrossDistroSameSuite confirms that two distros publishing the
+// same suite name (e.g. debian/trixie + ubuntu/trixie) end up with two
+// independent <distro>/dists/<suite> trees, each with its own Release/Packages
+// and its own pool tree. There is no shared dists/ or pool/ namespace at the
+// repo root that would cause one distro's publish to clobber the other.
+func TestIntegration_CrossDistroSameSuite(t *testing.T) {
+	root := t.TempDir()
+	debDir := t.TempDir()
+
+	runCmd := func(name string, args ...string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := Run(append([]string{"--repo", root, name}, args...), &stdout, &stderr, "test-rev")
+		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+	}
+
+	runCmd("init")
+
+	debianDeb := buildTestDeb(t, debDir, "alpha", "1.0", "amd64")
+	ubuntuDeb := buildTestDeb(t, debDir, "beta", "2.0", "amd64")
+
+	runCmd("add", "--distro", "debian", "--suite", "trixie", debianDeb)
+	runCmd("add", "--distro", "ubuntu", "--suite", "trixie", ubuntuDeb)
+	runCmd("publish", "--no-sign")
+
+	debianSuite := filepath.Join(root, "debian", "dists", "trixie")
+	ubuntuSuite := filepath.Join(root, "ubuntu", "dists", "trixie")
+	assert.DirExists(t, debianSuite)
+	assert.DirExists(t, ubuntuSuite)
+	assert.FileExists(t, filepath.Join(debianSuite, "Release"))
+	assert.FileExists(t, filepath.Join(ubuntuSuite, "Release"))
+
+	debianStanzas := readStanzas(t, filepath.Join(debianSuite,
+		"main", "binary-amd64", "Packages"))
+	require.Len(t, debianStanzas, 1, "debian/trixie should have only its own package")
+	assert.True(t, hasStanza(debianStanzas, "alpha", "1.0", "amd64"))
+	assert.False(t, hasStanza(debianStanzas, "beta", "2.0", "amd64"),
+		"debian/trixie must not see ubuntu/trixie packages")
+
+	ubuntuStanzas := readStanzas(t, filepath.Join(ubuntuSuite,
+		"main", "binary-amd64", "Packages"))
+	require.Len(t, ubuntuStanzas, 1, "ubuntu/trixie should have only its own package")
+	assert.True(t, hasStanza(ubuntuStanzas, "beta", "2.0", "amd64"))
+	assert.False(t, hasStanza(ubuntuStanzas, "alpha", "1.0", "amd64"),
+		"ubuntu/trixie must not see debian/trixie packages")
+
+	assert.FileExists(t, filepath.Join(root, "debian", "pool", "trixie",
+		"main", "a", "alpha", "alpha_1.0_amd64.deb"))
+	assert.FileExists(t, filepath.Join(root, "ubuntu", "pool", "trixie",
+		"main", "b", "beta", "beta_2.0_amd64.deb"))
+
+	// no shared top-level dists/ or pool/ should be created — those would
+	// indicate a regression to the old layout.
+	_, err := os.Stat(filepath.Join(root, "dists"))
+	require.ErrorIsf(t, err, fs.ErrNotExist, "no shared <root>/dists/ should exist")
+	_, err = os.Stat(filepath.Join(root, "pool"))
+	require.ErrorIsf(t, err, fs.ErrNotExist, "no shared <root>/pool/ should exist")
 }
 
 // assertSuiteLayout verifies the published structure for one (distro, suite):
@@ -229,7 +288,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 func assertSuiteLayout(t *testing.T, root, distro, suite string,
 	components, concreteArches []string) {
 	t.Helper()
-	suiteDir := filepath.Join(root, "dists", distro, suite)
+	suiteDir := filepath.Join(root, distro, "dists", suite)
 
 	for _, comp := range components {
 		_, err := os.Stat(filepath.Join(suiteDir, comp, "binary-all"))
@@ -297,9 +356,9 @@ func assertSuiteLayout(t *testing.T, root, distro, suite string,
 // content but separate inodes — debrepo never aliases pool files across suites.
 func assertNoCrossSuiteDedup(t *testing.T, root string) {
 	t.Helper()
-	bookworm := filepath.Join(root, "pool", "debian", "bookworm", "main",
+	bookworm := filepath.Join(root, "debian", "pool", "bookworm", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
-	bullseye := filepath.Join(root, "pool", "debian", "bullseye", "main",
+	bullseye := filepath.Join(root, "debian", "pool", "bullseye", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 
 	require.NotEqual(t, bookworm, bullseye, "pool paths must differ across suites")
@@ -403,8 +462,6 @@ func splitPackagesStanzas(body []byte) []string {
 // hasStanza reports whether any stanza in stanzas describes (name, version, arch).
 // Match is anchored on full Package/Version/Architecture lines so prefix matches
 // (alpha vs alpha-doc) don't fool it.
-//
-//nolint:unparam // generic helper kept name-agnostic for future fixtures
 func hasStanza(stanzas []string, name, version, arch string) bool {
 	wantName := "Package: " + name + "\n"
 	wantVer := "Version: " + version + "\n"
