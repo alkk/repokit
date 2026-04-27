@@ -10,6 +10,7 @@ import (
 	"crypto/sha512"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -21,12 +22,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/netxms/debrepo/pkg/config"
 	"github.com/netxms/debrepo/pkg/pool"
 	"github.com/netxms/debrepo/pkg/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/ulikunitz/xz"
 )
+
+// failingSigner is a sign.Signer stub whose Sign always errors. Used to drive
+// publishScopeLocked into its post-MkdirAllSync error path so the deferred
+// staging cleanup can be observed.
+type failingSigner struct{}
+
+func (failingSigner) Sign(_ context.Context, _ string) error {
+	return errors.New("boom")
+}
 
 // insertPackage writes one row directly into the repo, bypassing add. Used by
 // publish tests that need shapes (e.g. arch=arm64 or arch=all) for which we
@@ -178,6 +189,44 @@ func TestPublishRejectsArchAllOnlySuite(t *testing.T) {
 	assert.Contains(t, stderr.String(), "concrete-architecture")
 
 	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
+}
+
+// TestPublishRecoversLiveFromOldEvenForArchAllOnlySuite guards against a
+// regression where the arch=all-only preflight guard returned before
+// cleanStaging ran. If a prior crashed swap stranded the only good tree at
+// <suite>.old with the live tree missing, the next publish — even one that
+// will be rejected for being arch=all-only — must still promote .old back to
+// live before aborting. Otherwise the suite stays unavailable to apt and
+// stale .new/.old siblings are never reaped.
+func TestPublishRecoversLiveFromOldEvenForArchAllOnlySuite(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "all", "common", "1.0"))
+
+	distsParent := filepath.Join(root, "debian", "dists")
+	livePath := filepath.Join(distsParent, "bookworm")
+	oldPath := livePath + ".old"
+	newPath := livePath + ".new"
+	require.NoError(t, os.MkdirAll(oldPath, 0o755))
+	sentinel := filepath.Join(oldPath, "sentinel")
+	require.NoError(t, os.WriteFile(sentinel, []byte("recovered"), 0o644))
+	require.NoError(t, os.MkdirAll(newPath, 0o755))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", root, "publish",
+		"--distro", "debian", "--suite", "bookworm", "--no-sign",
+	}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), "arch=all")
+
+	body, err := os.ReadFile(filepath.Join(livePath, "sentinel"))
+	require.NoError(t, err, "live tree must exist with recovered sentinel")
+	assert.Equal(t, "recovered", string(body))
+	assert.NoDirExists(t, oldPath)
+	assert.NoDirExists(t, newPath)
 }
 
 func TestPublishMissingDistroOrSuite(t *testing.T) {
@@ -366,6 +415,81 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 			assert.FileExists(t, filepath.Join(distsParent, "bookworm", "Release"))
 		})
 	}
+}
+
+// TestPublishRemovesStagingOnFailure drives publishScopeLocked past
+// MkdirAllSync(newPath) and into the signer.Sign error path. After the
+// returned error propagates, the deferred cleanup must have removed
+// <suite>.new so a user inspecting the tree never sees a stale staging dir.
+// Bypasses Run([]string{...}) because pickSigner cannot be subbed through
+// that public seam.
+func TestPublishRemovesStagingOnFailure(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+
+	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+
+	cfg := &config.Config{Suites: map[string]config.SuiteConfig{}}
+	err = publishScope(context.Background(), root, r, cfg, failingSigner{}, "debian", "bookworm")
+	require.Error(t, err, "failingSigner must propagate an error")
+	assert.Contains(t, err.Error(), "signing Release")
+
+	newPath := filepath.Join(root, "debian", "dists", "bookworm.new")
+	assert.NoDirExists(t, newPath, "deferred cleanup must remove .new on failure")
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm"),
+		"live tree must not exist when publish never reaches swapDists")
+	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
+}
+
+// TestPublishPreservesLiveTreeOnFailure guards against a failed second publish
+// corrupting or partially mutating the previously-published live tree. After a
+// successful NopSigner publish, the bookworm/Release bytes are captured; a
+// subsequent publishScope call with failingSigner must error out, leave the
+// live tree byte-for-byte identical, and remove the staging .new sibling so
+// nothing leaks past the deferred cleanup.
+func TestPublishPreservesLiveTreeOnFailure(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", root, "publish",
+		"--distro", "debian", "--suite", "bookworm", "--no-sign",
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
+
+	livePath := filepath.Join(root, "debian", "dists", "bookworm")
+	releasePath := filepath.Join(livePath, "Release")
+	releaseBefore, err := os.ReadFile(releasePath)
+	require.NoError(t, err)
+	pkgPath := filepath.Join(livePath, "main", "binary-amd64", "Packages")
+	pkgBefore, err := os.ReadFile(pkgPath)
+	require.NoError(t, err)
+
+	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+
+	cfg := &config.Config{Suites: map[string]config.SuiteConfig{}}
+	err = publishScope(context.Background(), root, r, cfg, failingSigner{}, "debian", "bookworm")
+	require.Error(t, err, "failingSigner must propagate an error")
+	assert.Contains(t, err.Error(), "signing Release")
+
+	releaseAfter, err := os.ReadFile(releasePath)
+	require.NoError(t, err, "live Release must still exist after failed republish")
+	assert.Equal(t, releaseBefore, releaseAfter, "live Release bytes must be untouched")
+	pkgAfter, err := os.ReadFile(pkgPath)
+	require.NoError(t, err, "live Packages must still exist after failed republish")
+	assert.Equal(t, pkgBefore, pkgAfter, "live Packages bytes must be untouched")
+
+	assert.NoDirExists(t, livePath+suiteSuffixNew,
+		"deferred cleanup must remove .new on failure")
+	assert.NoDirExists(t, livePath+suiteSuffixOld,
+		".old must not survive a failed republish")
 }
 
 // TestPublishGzAndXzMatchPlain decompresses Packages.gz and Packages.xz and

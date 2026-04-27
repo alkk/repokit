@@ -170,37 +170,69 @@ func publishScope(ctx context.Context, root string, r *repo.Repo, cfg *config.Co
 // role is to block other writers (add/delete/verify --gc/concurrent
 // publishScope) from committing until the swap completes.
 func publishScopeLocked(ctx context.Context, root string, r *repo.Repo, cfg *config.Config,
-	signer sign.Signer, distro, suite string) error {
+	signer sign.Signer, distro, suite string) (err error) {
 	distsParent := filepath.Join(root, distro, distsDir)
 	livePath := filepath.Join(distsParent, suite)
 	newPath := livePath + suiteSuffixNew
 	oldPath := livePath + suiteSuffixOld
 
-	if err := cleanStaging(livePath, newPath, oldPath); err != nil {
+	// cleanStaging runs first so a prior crashed swap (live missing, .old
+	// present) is recovered before any preflight check that might abort —
+	// otherwise an arch=all-only suite (or any other rejection below) would
+	// leave the suite stranded at <suite>.old with no live tree.
+	err = cleanStaging(livePath, newPath, oldPath)
+	if err != nil {
 		return err
 	}
-	if err := pool.MkdirAllSync(newPath); err != nil {
+	// Install the staging-cleanup defer before any operation that could leave
+	// a partial <suite>.new on disk. MkdirAllSync runs os.MkdirAll first and
+	// then fsyncs each new parent; if an fsync fails after MkdirAll succeeded
+	// the directory is on disk but MkdirAllSync returns an error, so the
+	// defer must already be armed to wipe it. RemoveAll on a non-existent
+	// path is a no-op, so installing this before MkdirAllSync is safe even
+	// when nothing was created. swapDists renames .new → live on the success
+	// path, leaving RemoveAll a no-op there too. cleanStaging at the start
+	// of the next run is the safety net for crashes where this defer doesn't
+	// fire.
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(newPath)
+		}
+	}()
+
+	components, architectures, err := r.EnumerateForSuite(ctx, distro, suite)
+	if err != nil {
+		return fmt.Errorf("enumerating suite: %w", err)
+	}
+	concrete := index.ConcreteArches(architectures)
+	if len(components) > 0 && len(concrete) == 0 {
+		return errors.New(
+			"contains only arch=all packages — apt requires at least one concrete-architecture package per suite (arch=all rows are merged into every binary-<arch>/Packages, never published on their own)")
+	}
+
+	if err = pool.MkdirAllSync(newPath); err != nil {
 		return fmt.Errorf("creating staging dir: %w", err)
 	}
 
-	fileSets, archs, components, err := writeIndexes(ctx, r, newPath, distro, suite)
+	fileSets, archs, presentComponents, err := writeIndexes(ctx, r, newPath, distro, suite, components, concrete)
 	if err != nil {
 		return err
 	}
 
 	releasePath := filepath.Join(newPath, releaseFilename)
-	if err := writeReleaseFile(releasePath, releaseMetaFor(cfg, distro, suite, archs, components), fileSets); err != nil {
+	err = writeReleaseFile(releasePath, releaseMetaFor(cfg, distro, suite, archs, presentComponents), fileSets)
+	if err != nil {
 		return err
 	}
 
-	if err := signer.Sign(ctx, releasePath); err != nil {
+	if err = signer.Sign(ctx, releasePath); err != nil {
 		return fmt.Errorf("signing Release: %w", err)
 	}
 	// fsync every directory in the staged tree so the file entries written
 	// above are durable before swapDists makes the tree live. swapDists only
 	// fsyncs distsParent (where the rename happens); the staged tree itself
 	// would otherwise carry potentially-uncommitted dir entries into live.
-	if err := pool.FsyncTreeDirs(newPath); err != nil {
+	if err = pool.FsyncTreeDirs(newPath); err != nil {
 		return fmt.Errorf("syncing staged tree: %w", err)
 	}
 	return swapDists(distsParent, livePath, newPath, oldPath)
@@ -253,20 +285,14 @@ func recoverLiveFromOld(livePath, oldPath string) error {
 // already prefixed by the component/binary-arch directory so they slot
 // straight into the Release checksum blocks. Components and architectures in
 // the returned slices are limited to those that produced at least one stanza
-// — empty (component, arch) pairs are skipped.
+// — empty (component, arch) pairs are skipped. The caller is responsible for
+// enumerating components and for enforcing the arch=all-only guard before
+// any staging directory is created; concrete must already be the output of
+// index.ConcreteArches (i.e. with "all" filtered out) so the inner loop
+// never tries to write a binary-all/ tree.
 func writeIndexes(ctx context.Context, r *repo.Repo, newPath, distro, suite string,
+	components, concrete []string,
 ) ([]index.FileSet, []string, []string, error) {
-	components, architectures, err := r.EnumerateForSuite(ctx, distro, suite)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("enumerating suite: %w", err)
-	}
-
-	concrete := index.ConcreteArches(architectures)
-	if len(components) > 0 && len(concrete) == 0 {
-		return nil, nil, nil, fmt.Errorf(
-			"%s/%s contains only arch=all packages — apt requires at least one concrete-architecture package per suite (arch=all rows are merged into every binary-<arch>/Packages, never published on their own)",
-			distro, suite)
-	}
 	var files []index.FileSet
 	presentArches := map[string]struct{}{}
 	presentComponents := map[string]struct{}{}

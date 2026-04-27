@@ -124,20 +124,20 @@ it).
 - Modify: `pkg/cli/publish.go`
 - Modify: `pkg/cli/publish_test.go`
 
-- [ ] in `publishScopeLocked`, call `r.EnumerateForSuite` and compute
+- [x] in `publishScopeLocked`, call `r.EnumerateForSuite` and compute
       `index.ConcreteArches` *before* `cleanStaging` / `MkdirAllSync`;
       return the existing `arch=all`-only error from there
-- [ ] change `writeIndexes` signature to accept the precomputed
+- [x] change `writeIndexes` signature to accept the precomputed
       `components` and `concrete` slices; drop its own enumeration call
       and the redundant arch-only guard. The raw `architectures` slice
       from `EnumerateForSuite` is no longer needed past the guard — only
       `concrete` propagates into `writeIndexes`
-- [ ] update the single call site in `publishScopeLocked` to pass them in
-- [ ] extend `TestPublishRejectsArchAllOnlySuite` to additionally assert
+- [x] update the single call site in `publishScopeLocked` to pass them in
+- [x] extend `TestPublishRejectsArchAllOnlySuite` to additionally assert
       both `<suite>.new` AND `<suite>.old` are absent:
       `assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))`
       and the `.old` equivalent (symmetry with `TestPublishEmptySuite`)
-- [ ] run `go test ./pkg/cli/...` — must pass before next task
+- [x] run `go test ./pkg/cli/...` — must pass before next task
 
 ### Task 2: Defer-on-error cleanup of `<suite>.new`
 
@@ -145,7 +145,7 @@ it).
 - Modify: `pkg/cli/publish.go`
 - Modify: `pkg/cli/publish_test.go`
 
-- [ ] change `publishScopeLocked` to use a named return `(err error)`.
+- [x] change `publishScopeLocked` to use a named return `(err error)`.
       The current `return swapDists(...)` (publish.go:206) needs to keep
       the assignment-then-return form so the defer reads the
       post-`swapDists` value. On the happy path `swapDists` has already
@@ -153,36 +153,37 @@ it).
       no-op; on a `swapDists` partial failure (live → `.old` succeeded
       but `.new` → live did not), `.new` still exists and the defer
       cleans it — exactly the case we want
-- [ ] immediately after `pool.MkdirAllSync(newPath)` succeeds, install a
+- [x] immediately after `pool.MkdirAllSync(newPath)` succeeds, install a
       defer that calls `os.RemoveAll(newPath)` when `err != nil`
-- [ ] add `failingSigner` stub in `publish_test.go` — a 5-line
+- [x] add `failingSigner` stub in `publish_test.go` — a 5-line
       `sign.Signer` whose `Sign` returns `errors.New("boom")`
-- [ ] add `TestPublishRemovesStagingOnFailure` that calls `publishScope`
+- [x] add `TestPublishRemovesStagingOnFailure` that calls `publishScope`
       directly (same `cli` package — `pickSigner` cannot be subbed via
       the public `Run([]string{...})` seam, so the test bypasses it)
       with the `failingSigner` and a populated suite that has a concrete
       arch, so the function reaches `signer.Sign` after `.new` exists
-- [ ] in that test, assert publish returns a non-nil error AND
+- [x] in that test, assert publish returns a non-nil error AND
       `<suite>.new` does not exist on disk afterwards
-- [ ] verify the success path still works:
+- [x] verify the success path still works:
       `TestPublishAtomicSwapReplacesLive` and friends continue to pass
-- [ ] run `go test ./pkg/cli/...` — must pass before next task
+- [x] run `go test ./pkg/cli/...` — must pass before next task
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] re-read `publishScopeLocked` end-to-end and confirm the three-phase
+- [x] re-read `publishScopeLocked` end-to-end and confirm the three-phase
       ordering (read+validate → stage → promote) holds
-- [ ] confirm `cleanStaging` is still invoked at the start of every run
+- [x] confirm `cleanStaging` is still invoked at the start of every run
       (crash-recovery path unchanged)
-- [ ] confirm no caller outside `publishScopeLocked` references the new
+- [x] confirm no caller outside `publishScopeLocked` references the new
       `writeIndexes` signature
-- [ ] run full test suite: `go test ./...`
-- [ ] run `make lint` if the project ships a Makefile target for it
+- [x] run full test suite: `go test ./...`
+- [x] run `make lint` if the project ships a Makefile target for it
+      (shadow regression fixed in df16ef2; `make lint` reports 0 issues)
 
 ### Task 4: [Final] Update documentation
 
-- [ ] no README/CLAUDE.md changes expected — confirm by re-reading both
-- [ ] move this plan to `docs/plans/completed/`
+- [x] no README/CLAUDE.md changes needed (verified)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
