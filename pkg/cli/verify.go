@@ -18,8 +18,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/netxms/debrepo/pkg/pool"
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/pool"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 // VerifyCmd checks pool files against the database and (optionally) garbage-

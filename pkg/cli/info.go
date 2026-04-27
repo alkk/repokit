@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/netxms/debrepo/pkg/deb"
-	"github.com/netxms/debrepo/pkg/pool"
+	"github.com/alkk/repokit/pkg/deb"
+	"github.com/alkk/repokit/pkg/pool"
 )
 
 // InfoCmd inspects a single .deb file and prints what `add` would do, without

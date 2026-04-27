@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ulikunitz/xz"
 
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 func samplePackage(name string) repo.Package {

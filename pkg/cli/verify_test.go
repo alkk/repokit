@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

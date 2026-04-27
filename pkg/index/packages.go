@@ -19,8 +19,8 @@ import (
 
 	"github.com/ulikunitz/xz"
 
-	"github.com/netxms/debrepo/pkg/pool"
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/pool"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 // File holds the size and four hashes of one written index file. Path is the

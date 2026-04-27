@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/netxms/debrepo/pkg/pool"
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/pool"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 // DeleteCmd removes packages from a suite. It mutates the database and pool
-// only; the dists/ tree is rebuilt by a subsequent `debrepo publish` run.
+// only; the dists/ tree is rebuilt by a subsequent `repokit publish` run.
 //
 // At least one of --name or --sha256 is required to prevent whole-suite
 // wipes. Deleting every version of a named package additionally requires
@@ -175,6 +175,6 @@ func (cmd *DeleteCmd) report(c *Context, rows []repo.Package, dryRun bool) {
 		fmt.Fprintf(c.Stdout, "would delete %d package(s) (dry run, no changes made)\n", len(rows))
 		return
 	}
-	fmt.Fprintf(c.Stdout, "deleted %d package(s) — run 'debrepo publish --distro %s --suite %s' to update indexes\n",
+	fmt.Fprintf(c.Stdout, "deleted %d package(s) — run 'repokit publish --distro %s --suite %s' to update indexes\n",
 		len(rows), cmd.Distro, cmd.Suite)
 }

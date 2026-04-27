@@ -1,4 +1,4 @@
-// Package config loads and validates the debrepo YAML config file.
+// Package config loads and validates the repokit YAML config file.
 package config
 
 import (
@@ -14,7 +14,7 @@ import (
 // signing_key value.
 var ErrMissingSigningKey = errors.New("config: signing_key is required")
 
-// Config is the parsed debrepo config file.
+// Config is the parsed repokit config file.
 type Config struct {
 	SigningKey string                 `yaml:"signing_key"`
 	Suites     map[string]SuiteConfig `yaml:"suites"`

@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: debrepo
-    main: ./cmd/debrepo
-    binary: debrepo
+  - id: repokit
+    main: ./cmd/repokit
+    binary: repokit
     env:
       - CGO_ENABLED=0
     goos:
@@ -16,19 +16,19 @@ builds:
       - -s -w -X main.revision={{.Tag}}-{{.ShortCommit}}-{{ trimsuffix (replace (replace .CommitDate "-" "") ":" "") "Z" }}
 
 archives:
-  - id: debrepo
+  - id: repokit
     ids:
-      - debrepo
+      - repokit
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
 nfpms:
-  - id: debrepo
-    package_name: debrepo
+  - id: repokit
+    package_name: repokit
     ids:
-      - debrepo
-    vendor: netxms
-    homepage: https://github.com/netxms/debrepo
+      - repokit
+    vendor: alkk
+    homepage: https://github.com/alkk/repokit
     maintainer: netxms
     description: Minimalistic Debian apt repository manager backed by SQLite
     license: MIT

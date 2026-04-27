@@ -11,14 +11,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/netxms/debrepo/pkg/deb"
-	"github.com/netxms/debrepo/pkg/pool"
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/deb"
+	"github.com/alkk/repokit/pkg/pool"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 // AddCmd stages one or more .deb packages into the (distro, suite, component)
 // target. It only mutates the database and the pool tree; publishing the
-// dists/ index requires a separate `debrepo publish` invocation.
+// dists/ index requires a separate `repokit publish` invocation.
 type AddCmd struct {
 	Distro    string `long:"distro" description:"target distribution (e.g. debian, ubuntu)" required:"true"`
 	Suite     string `long:"suite" description:"target suite (e.g. bookworm)" required:"true"`
@@ -113,13 +113,13 @@ func (cmd *AddCmd) run(c *Context) error {
 	// than reporting the whole add as failed.
 	for _, p := range staleReplaced {
 		if err := pool.Delete(c.Root, p); err != nil {
-			fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'debrepo verify --gc' to reclaim\n", p, err)
+			fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, err)
 		}
 	}
 
 	if !c.Quiet {
 		fmt.Fprintf(c.Stdout,
-			"staged %d packages in %s/%s — run 'debrepo publish --distro %s --suite %s' to release\n",
+			"staged %d packages in %s/%s — run 'repokit publish --distro %s --suite %s' to release\n",
 			len(cmd.Args.Debs), cmd.Distro, cmd.Suite, cmd.Distro, cmd.Suite)
 	}
 	return nil

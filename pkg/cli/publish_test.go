@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/netxms/debrepo/pkg/config"
-	"github.com/netxms/debrepo/pkg/pool"
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/config"
+	"github.com/alkk/repokit/pkg/pool"
+	"github.com/alkk/repokit/pkg/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/ulikunitz/xz"
@@ -269,7 +269,7 @@ func TestPublishAllScopesWhenBothEmpty(t *testing.T) {
 	assert.FileExists(t, filepath.Join(root, "ubuntu", "dists", "noble", "Release"))
 }
 
-// TestPublishAllScopesIncludesEmptiedSuites guards against `debrepo publish`
+// TestPublishAllScopesIncludesEmptiedSuites guards against `repokit publish`
 // (no scope) skipping a suite that was emptied by `delete`. The dists tree
 // must be republished so the stale Packages/Release files do not keep
 // pointing at packages that no longer exist.
@@ -329,7 +329,7 @@ func TestPublishAllScopesIgnoresStrayDirsWithoutRelease(t *testing.T) {
 	stray := filepath.Join(root, "debian", "dists", "notes")
 	require.NoError(t, os.MkdirAll(stray, 0o755))
 	strayFile := filepath.Join(stray, "readme.txt")
-	require.NoError(t, os.WriteFile(strayFile, []byte("not managed by debrepo\n"), 0o600))
+	require.NoError(t, os.WriteFile(strayFile, []byte("not managed by repokit\n"), 0o600))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--repo", root, "publish", "--no-sign"},

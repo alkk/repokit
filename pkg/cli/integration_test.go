@@ -353,7 +353,7 @@ func assertSuiteLayout(t *testing.T, root, distro, suite string,
 
 // assertNoCrossSuiteDedup confirms that the same NVRA staged into two suites
 // of the same distro lands at distinct physical pool paths with byte-identical
-// content but separate inodes — debrepo never aliases pool files across suites.
+// content but separate inodes — repokit never aliases pool files across suites.
 func assertNoCrossSuiteDedup(t *testing.T, root string) {
 	t.Helper()
 	bookworm := filepath.Join(root, "debian", "pool", "bookworm", "main",
@@ -485,7 +485,7 @@ func buildTestDeb(t *testing.T, dir, name, version, arch string) string {
 
 	control := fmt.Sprintf(
 		"Package: %s\nVersion: %s\nArchitecture: %s\n"+
-			"Maintainer: debrepo tests <test@example.invalid>\n"+
+			"Maintainer: repokit tests <test@example.invalid>\n"+
 			"Description: %s integration fixture (%s/%s)\n",
 		name, version, arch, name, version, arch)
 

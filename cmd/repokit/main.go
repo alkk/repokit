@@ -4,7 +4,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/netxms/debrepo/pkg/cli"
+	"github.com/alkk/repokit/pkg/cli"
 )
 
 // revision is replaced at build time via -ldflags "-X main.revision=...".

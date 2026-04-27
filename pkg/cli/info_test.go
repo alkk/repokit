@@ -12,7 +12,7 @@ import (
 func TestInfoPrintsControlAndHashes(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
-	// info should not require a repo — run from a clean cwd with no DEBREPO_ROOT.
+	// info should not require a repo — run from a clean cwd with no REPOKIT_ROOT.
 	t.Setenv(envRepo, "")
 	t.Chdir(t.TempDir())
 

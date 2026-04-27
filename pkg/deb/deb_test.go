@@ -95,7 +95,7 @@ func TestInspectControlIsCanonical(t *testing.T) {
 		"Source: foo (1.2-3)\n" +
 		"Version: 1.0\n" +
 		"Architecture: amd64\n" +
-		"Maintainer: debrepo tests <test@example.invalid>\n" +
+		"Maintainer: repokit tests <test@example.invalid>\n" +
 		"Description: hello-zst fixture\n"
 	assert.Equal(t, want, info.Control)
 }

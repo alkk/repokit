@@ -41,7 +41,7 @@ func main() {
 			control: "Package: hello-gz\n" +
 				"Version: 1.0\n" +
 				"Architecture: amd64\n" +
-				"Maintainer: debrepo tests <test@example.invalid>\n" +
+				"Maintainer: repokit tests <test@example.invalid>\n" +
 				"Description: hello-gz fixture\n" +
 				" Multi-line description body for normalisation tests.\n",
 		},
@@ -52,7 +52,7 @@ func main() {
 				"Source: hello\n" +
 				"Version: 1.0\n" +
 				"Architecture: amd64\n" +
-				"Maintainer: debrepo tests <test@example.invalid>\n" +
+				"Maintainer: repokit tests <test@example.invalid>\n" +
 				"Description: hello-xz fixture\n",
 		},
 		{
@@ -62,7 +62,7 @@ func main() {
 				"Source: foo (1.2-3)\n" +
 				"Version: 1.0\n" +
 				"Architecture: amd64\n" +
-				"Maintainer: debrepo tests <test@example.invalid>\n" +
+				"Maintainer: repokit tests <test@example.invalid>\n" +
 				"Description: hello-zst fixture\n" +
 				"\n\n   \n",
 		},
@@ -204,7 +204,7 @@ func buildDataTar() ([]byte, error) {
 	}); err != nil {
 		return nil, err
 	}
-	body := []byte("hello, debrepo tests\n")
+	body := []byte("hello, repokit tests\n")
 	if err := tw.WriteHeader(&tar.Header{
 		Name:     "./usr/share/hello.txt",
 		Mode:     0o644,

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 // ListCmd prints packages matching the supplied filters in either a

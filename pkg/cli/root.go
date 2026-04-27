@@ -1,4 +1,4 @@
-// Package cli wires the debrepo subcommands behind a single go-flags parser.
+// Package cli wires the repokit subcommands behind a single go-flags parser.
 package cli
 
 import (
@@ -18,12 +18,12 @@ const (
 	ExitError  = 1
 	ExitUsage  = 2
 	dbFilename = "repo.db"
-	envRepo    = "DEBREPO_ROOT"
+	envRepo    = "REPOKIT_ROOT"
 )
 
 // ErrRepoNotFound is returned when the resolved repo root is missing repo.db
 // and the requested command is not init.
-var ErrRepoNotFound = errors.New("no repo.db found at repo root (run 'debrepo init' first)")
+var ErrRepoNotFound = errors.New("no repo.db found at repo root (run 'repokit init' first)")
 
 // validateScopeName rejects --distro / --suite / --component / --arch values
 // that would let a malicious operator escape the dists/ or pool/ tree by
@@ -74,7 +74,7 @@ func requireScopeName(field, val string) error {
 
 // Options holds the global flags and all subcommand groups.
 type Options struct {
-	Repo  string `long:"repo" short:"r" env:"DEBREPO_ROOT" description:"path to repository root (defaults to $DEBREPO_ROOT or current directory)"`
+	Repo  string `long:"repo" short:"r" env:"REPOKIT_ROOT" description:"path to repository root (defaults to $REPOKIT_ROOT or current directory)"`
 	Quiet bool   `long:"quiet" short:"q" description:"suppress non-error output"`
 
 	Init    InitCmd    `command:"init" description:"initialize a new repository"`
@@ -102,7 +102,7 @@ func commandName(p *flags.Parser) string {
 func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 	opts := &Options{}
 	parser := flags.NewParser(opts, flags.HelpFlag|flags.PassDoubleDash)
-	parser.Name = "debrepo"
+	parser.Name = "repokit"
 	parser.LongDescription = fmt.Sprintf("Minimal Debian repository manager (revision %s).", revision)
 
 	rest, err := parser.ParseArgs(argv)

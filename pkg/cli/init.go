@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/repo"
 )
 
 // InitCmd creates a new repository at the resolved root. The optional
@@ -20,7 +20,7 @@ type InitCmd struct {
 
 // configTemplate is the starter config.yaml written by init. It must parse
 // cleanly through config.Load (signing_key non-empty, well-formed YAML).
-const configTemplate = `# debrepo configuration
+const configTemplate = `# repokit configuration
 # Replace REPLACE_ME with the gpg key id or fingerprint that signs Release.
 signing_key: "REPLACE_ME"
 

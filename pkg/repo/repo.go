@@ -1,4 +1,4 @@
-// Package repo owns the SQLite database that holds debrepo's package metadata.
+// Package repo owns the SQLite database that holds repokit's package metadata.
 package repo
 
 import (
@@ -14,7 +14,7 @@ import (
 // driverName is the database/sql driver registered by modernc.org/sqlite.
 const driverName = "sqlite"
 
-// Repo is a handle to the debrepo metadata database.
+// Repo is a handle to the repokit metadata database.
 type Repo struct {
 	db   *sql.DB
 	path string

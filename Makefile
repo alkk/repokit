@@ -5,7 +5,7 @@ TIMESTAMP=$(shell git log -1 --format=%ct HEAD 2>/dev/null | xargs -I{} date -u 
 GIT_REV=$(shell printf "%s-%s-%s" "$(BRANCH)" "$(HASH)" "$(TIMESTAMP)")
 REV=$(if $(filter --,$(GIT_REV)),latest,$(GIT_REV))
 
-BIN=debrepo
+BIN=repokit
 SRC=./cmd/$(BIN)
 
 all: test build

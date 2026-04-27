@@ -20,7 +20,7 @@ const digestAlgo = "SHA256"
 
 // GPGSigner shells out to gpg to clearsign InRelease and produce a detached
 // Release.gpg next to a Release file. It assumes gpg-agent already holds the
-// private key for KeyID — debrepo never prompts for a passphrase itself.
+// private key for KeyID — repokit never prompts for a passphrase itself.
 type GPGSigner struct {
 	// KeyID is the key id or fingerprint passed via --default-key.
 	KeyID string

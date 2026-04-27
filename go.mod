@@ -1,4 +1,4 @@
-module github.com/netxms/debrepo
+module github.com/alkk/repokit
 
 go 1.26.1
 

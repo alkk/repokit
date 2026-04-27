@@ -1,6 +1,6 @@
-# debrepo usage
+# repokit usage
 
-Reference documentation for the `debrepo` command-line tool. This page is
+Reference documentation for the `repokit` command-line tool. This page is
 information-oriented — for a guided walkthrough, see the quickstart in
 [README.md](../README.md).
 
@@ -10,11 +10,11 @@ These apply to every subcommand and must precede the subcommand name.
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `-r`, `--repo <path>` | `DEBREPO_ROOT` | current working directory | repository root |
+| `-r`, `--repo <path>` | `REPOKIT_ROOT` | current working directory | repository root |
 | `-q`, `--quiet` | — | off | suppress non-error output |
 | `-h`, `--help` | — | — | print help for the parser or active subcommand |
 
-Repo-root resolution is `--repo` > `$DEBREPO_ROOT` > cwd. Every subcommand
+Repo-root resolution is `--repo` > `$REPOKIT_ROOT` > cwd. Every subcommand
 except `init` and `info` requires the resolved root to contain a `repo.db`.
 
 Scope flag values (`--distro`, `--suite`, `--component`, `--arch`) are
@@ -41,7 +41,7 @@ a starter `config.yaml` at the repo root. Per-distro `pool/` and `dists/`
 subtrees are created on demand by the first `add` and `publish`.
 
 ```
-debrepo init [<repo-root>]
+repokit init [<repo-root>]
 ```
 
 | Argument | Description |
@@ -58,7 +58,7 @@ Mutates `repo.db` and `pool/` only — running `publish` afterwards is required
 to update the apt indexes.
 
 ```
-debrepo add --distro <d> --suite <s> [--component <c>] [--replace] <deb>...
+repokit add --distro <d> --suite <s> [--component <c>] [--replace] <deb>...
 ```
 
 | Flag | Required | Default | Description |
@@ -94,7 +94,7 @@ empty `Packages` files and a `Release` with empty
 removed packages.
 
 ```
-debrepo delete --distro <d> --suite <s> [filters...] [--all-versions] [--dry-run]
+repokit delete --distro <d> --suite <s> [filters...] [--all-versions] [--dry-run]
 ```
 
 | Flag | Required | Default | Description |
@@ -117,7 +117,7 @@ wiping a whole suite.
 Print packages matching the supplied filters.
 
 ```
-debrepo list [filters...] [--format table|json]
+repokit list [filters...] [--format table|json]
 ```
 
 | Flag | Default | Description |
@@ -140,7 +140,7 @@ Substring match (case-insensitive) against the package name and the stored
 control text.
 
 ```
-debrepo search [--distro <d>] [--suite <s>] [--format table|json] <query>
+repokit search [--distro <d>] [--suite <s>] [--format table|json] <query>
 ```
 
 | Argument | Description |
@@ -156,7 +156,7 @@ Rebuild `<distro>/dists/<suite>/` for one or more scopes and sign the resulting
 `Release`.
 
 ```
-debrepo publish [--distro <d> --suite <s>] [--no-sign]
+repokit publish [--distro <d> --suite <s>] [--no-sign]
 ```
 
 | Flag | Default | Description |
@@ -203,7 +203,7 @@ Rehash pool files against the four hashes stored in the database, and (with
 `--gc`) garbage-collect orphan pool files that have no DB row.
 
 ```
-debrepo verify [--distro <d>] [--suite <s>] [--gc]
+repokit verify [--distro <d>] [--suite <s>] [--gc]
 ```
 
 | Flag | Default | Description |
@@ -232,7 +232,7 @@ Inspect a single `.deb` file and print what `add` would do, without touching
 the repo. Does not require a `repo.db` at the resolved root.
 
 ```
-debrepo info [--distro <d> --suite <s> [--component <c>]] <deb>
+repokit info [--distro <d> --suite <s> [--component <c>]] <deb>
 ```
 
 | Argument | Description |
@@ -364,5 +364,5 @@ mirror:
 - No `Contents-<arch>` files (used by `apt-file`, not `apt-get` itself).
 - No `by-hash/` directories. `Acquire-By-Hash: no` is set explicitly in
   `Release`.
-- No `Sources` indexes — `debrepo` is binary-only.
+- No `Sources` indexes — `repokit` is binary-only.
 - No `Packages.zst` — gz + xz is sufficient for every current apt client.

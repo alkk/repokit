@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/netxms/debrepo/pkg/config"
-	"github.com/netxms/debrepo/pkg/index"
-	"github.com/netxms/debrepo/pkg/pool"
-	"github.com/netxms/debrepo/pkg/repo"
-	"github.com/netxms/debrepo/pkg/sign"
+	"github.com/alkk/repokit/pkg/config"
+	"github.com/alkk/repokit/pkg/index"
+	"github.com/alkk/repokit/pkg/pool"
+	"github.com/alkk/repokit/pkg/repo"
+	"github.com/alkk/repokit/pkg/sign"
 )
 
 // PublishCmd rebuilds dists/<distro>/<suite>/ for one or more scopes and signs

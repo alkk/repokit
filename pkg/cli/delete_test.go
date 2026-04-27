@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/netxms/debrepo/pkg/repo"
+	"github.com/alkk/repokit/pkg/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +76,7 @@ func TestDeleteByNameAndVersion(t *testing.T) {
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted hello-gz_1.0_amd64")
 	assert.Contains(t, stdout, "deleted 1 package(s)")
-	assert.Contains(t, stdout, "run 'debrepo publish --distro debian --suite bookworm'")
+	assert.Contains(t, stdout, "run 'repokit publish --distro debian --suite bookworm'")
 
 	assert.Equal(t, 1, rowCount(t, root))
 	assert.Equal(t, 1, poolFileCount(t, root))
@@ -147,7 +147,7 @@ func TestDeleteDryRunMakesNoChanges(t *testing.T) {
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "would delete hello-gz_1.0_amd64")
 	assert.Contains(t, stdout, "(dry run, no changes made)")
-	assert.NotContains(t, stdout, "run 'debrepo publish")
+	assert.NotContains(t, stdout, "run 'repokit publish")
 
 	assert.Equal(t, 1, rowCount(t, root), "dry-run must leave DB untouched")
 	assert.Equal(t, 1, poolFileCount(t, root), "dry-run must leave pool untouched")
