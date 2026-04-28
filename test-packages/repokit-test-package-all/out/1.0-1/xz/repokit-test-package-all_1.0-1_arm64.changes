@@ -1,0 +1,34 @@
+Format: 1.8
+Date: Fri, 08 May 2026 20:52:46 +0000
+Source: repokit-test-package-all
+Binary: repokit-test-package-all
+Architecture: source all
+Version: 1.0-1
+Distribution: unstable
+Urgency: medium
+Maintainer: root <root@unknown>
+Changed-By: repokit test <test@example.com>
+Description:
+ repokit-test-package-all - <insert up to 60 chars description>
+Changes:
+ repokit-test-package-all (1.0-1) unstable; urgency=medium
+ .
+   * Test build 1.0-1 (xz).
+Checksums-Sha1:
+ fe7479c632832ef32072e8577ab5df6af55e0790 908 repokit-test-package-all_1.0-1.dsc
+ baad9ad5cd749e9d48021cd7d16cea98f6e41dba 2365 repokit-test-package-all_1.0.orig.tar.gz
+ d019c55b80c515245e35698ccde949892716ac13 1700 repokit-test-package-all_1.0-1.debian.tar.xz
+ a4ea02b2416c06a00f48886b94ac2704f3cbcef2 2300 repokit-test-package-all_1.0-1_all.deb
+ 60be68ba18925346e71b76b78552915219a2b8b3 3968 repokit-test-package-all_1.0-1_arm64.buildinfo
+Checksums-Sha256:
+ 46fddae707419d8b2c9eae6b33e36fae9e44db5e4ab904a8ed4800e73eebadbd 908 repokit-test-package-all_1.0-1.dsc
+ 3d5402bf2292fd30e24b1206c600f06a865303005a0770975ce4029705dfd1f6 2365 repokit-test-package-all_1.0.orig.tar.gz
+ 049577e5e6971c233bd22a7ddf4ff600e7cd7636b8dd296c8a25004e274fd39d 1700 repokit-test-package-all_1.0-1.debian.tar.xz
+ 1919a5d02c98ece80bb0ebc4dbfc81419e863bd8a2b45f24c331336026eabbcf 2300 repokit-test-package-all_1.0-1_all.deb
+ 20cb55631532dacceecb815c7355ecd11e4ac59efb19aedba5f3a1e96c4c6175 3968 repokit-test-package-all_1.0-1_arm64.buildinfo
+Files:
+ bf7a80d2dfe89d713ad1a833b3c82117 908 unknown optional repokit-test-package-all_1.0-1.dsc
+ 370c85757948f06ca590d74f11419ff4 2365 unknown optional repokit-test-package-all_1.0.orig.tar.gz
+ 19196619da77ca4a98c6f0aa95d72200 1700 unknown optional repokit-test-package-all_1.0-1.debian.tar.xz
+ bde0969a8c905e64c4b9ce034ae9b815 2300 unknown optional repokit-test-package-all_1.0-1_all.deb
+ 1d01285ed7bc75cb1814678a0f5ef113 3968 unknown optional repokit-test-package-all_1.0-1_arm64.buildinfo

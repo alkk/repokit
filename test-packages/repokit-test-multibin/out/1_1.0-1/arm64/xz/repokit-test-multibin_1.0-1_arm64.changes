@@ -1,0 +1,42 @@
+Format: 1.8
+Date: Fri, 08 May 2026 20:56:17 +0000
+Source: repokit-test-multibin
+Binary: repokit-test-multibin repokit-test-multibin-common repokit-test-multibin-dev
+Architecture: source all arm64
+Version: 1:1.0-1
+Distribution: unstable
+Urgency: medium
+Maintainer: repokit test <test@example.com>
+Changed-By: repokit test <test@example.com>
+Description:
+ repokit-test-multibin - repokit test multibin (binary)
+ repokit-test-multibin-common - repokit test multibin (common)
+ repokit-test-multibin-dev - repokit test multibin (dev)
+Changes:
+ repokit-test-multibin (1:1.0-1) unstable; urgency=medium
+ .
+   * Test build 1:1.0-1 (xz).
+Checksums-Sha1:
+ a42d98e67dc90e36e8e0e5ba3621e273fdc615f8 1051 repokit-test-multibin_1.0-1.dsc
+ cbe130d9168d963a7694e119d4a8ea62945c97ab 1483 repokit-test-multibin_1.0.orig.tar.gz
+ a1db4722cb96944c8c1e7c3604c9cb645f9b8b9d 812 repokit-test-multibin_1.0-1.debian.tar.xz
+ 9f230e831dba94d7c5a01dd04adba484b4ac51ae 1240 repokit-test-multibin-common_1.0-1_all.deb
+ a2c81e9abd299bff586d2e42079ab3b5595d9dd0 1224 repokit-test-multibin-dev_1.0-1_arm64.deb
+ 059639b3b4a2cefe08960f827489a215ff2e7ac9 5432 repokit-test-multibin_1.0-1_arm64.buildinfo
+ 5a592c8d19db0018796e2b61c7ab2d5afc05bebf 1200 repokit-test-multibin_1.0-1_arm64.deb
+Checksums-Sha256:
+ d0badad4e2a0a94f4dda169434848e36e733e3eae7e92119caab213108c57fe2 1051 repokit-test-multibin_1.0-1.dsc
+ 729e761e3ecfb53798353a73a1c6530b70e6e560819f4229ad5fe028556d6175 1483 repokit-test-multibin_1.0.orig.tar.gz
+ d4067e5627c6aebd28cb57e8e6ef4e40c655b2227b36bfa1bc8ad9b98197dbf7 812 repokit-test-multibin_1.0-1.debian.tar.xz
+ c96b1fb418cc4b961c45caa6bf6edbc1a66202f318f967f0fe8f92c2b732d4bf 1240 repokit-test-multibin-common_1.0-1_all.deb
+ e41ba057b7881cf3a94abe5eeb3a256a889db535e0ca7179cacebaa09fec2d3a 1224 repokit-test-multibin-dev_1.0-1_arm64.deb
+ aba7bd2a06de3187d82faac24eea7fae2a46372cc89995aab713412a0db8ca9c 5432 repokit-test-multibin_1.0-1_arm64.buildinfo
+ 0c8139fd8401d87aaaf53a5acfc0f58da5bb67cff1808334042335352460b70d 1200 repokit-test-multibin_1.0-1_arm64.deb
+Files:
+ fb20c0eeb0101b019745861d6a326048 1051 misc optional repokit-test-multibin_1.0-1.dsc
+ f5d6fb19784b688c9a33878b72d52b05 1483 misc optional repokit-test-multibin_1.0.orig.tar.gz
+ 02c2ff93b90ddd3137ea6a8ad7e34026 812 misc optional repokit-test-multibin_1.0-1.debian.tar.xz
+ 40f08101d6c1f16648692362c7c4f3ec 1240 misc optional repokit-test-multibin-common_1.0-1_all.deb
+ c54ffc5cffb5ef7af2946443bebf93e5 1224 misc optional repokit-test-multibin-dev_1.0-1_arm64.deb
+ 501f0ee213050c2c3a7b57b67c5f265e 5432 misc optional repokit-test-multibin_1.0-1_arm64.buildinfo
+ 09e0702004918b64570109a6a10e3cef 1200 misc optional repokit-test-multibin_1.0-1_arm64.deb

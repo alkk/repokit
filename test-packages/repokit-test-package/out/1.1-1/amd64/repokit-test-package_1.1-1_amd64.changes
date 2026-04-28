@@ -1,0 +1,34 @@
+Format: 1.8
+Date: Fri, 08 May 2026 21:18:33 +0000
+Source: repokit-test-package
+Binary: repokit-test-package
+Architecture: source amd64
+Version: 1.1-1
+Distribution: unstable
+Urgency: medium
+Maintainer: root <root@unknown>
+Changed-By: repokit test <test@example.com>
+Description:
+ repokit-test-package - <insert up to 60 chars description>
+Changes:
+ repokit-test-package (1.1-1) unstable; urgency=medium
+ .
+   * Test build 1.1-1.
+Checksums-Sha1:
+ 5b709db727855d90d5abc24f0c91bf08e54dbe68 872 repokit-test-package_1.1-1.dsc
+ 809a204cf8c8b72af7bb343a0ca78e5d1082a65d 2346 repokit-test-package_1.1.orig.tar.gz
+ e97b5212e4ff8f48c4f4d0145fb2c57e4f28fc3b 1672 repokit-test-package_1.1-1.debian.tar.xz
+ 64023723f507dde05d59168f5616c3b89d5f03bb 3957 repokit-test-package_1.1-1_amd64.buildinfo
+ 28f19794dc92818af96e333309099f128a596a3d 2284 repokit-test-package_1.1-1_amd64.deb
+Checksums-Sha256:
+ 331685cbbbeada8ecf8d09529346d50bd9354ad7ca23ca696a0239d7c64091d2 872 repokit-test-package_1.1-1.dsc
+ b5b0d3eb1d61234249a723ffc61915e49061c178c180fff7596d4dd381116bd3 2346 repokit-test-package_1.1.orig.tar.gz
+ 45d5d5f82446b8703814d08008793611625be06d422097749173e1bd52568673 1672 repokit-test-package_1.1-1.debian.tar.xz
+ 3a7628b023aa7ce39f1bb66db3de0ebe0d60b1c88990a00a9604f158ed1347f0 3957 repokit-test-package_1.1-1_amd64.buildinfo
+ 4950c9c85012bdd9be60c9e9890e57a78f6017335900366ef528c2a42139343e 2284 repokit-test-package_1.1-1_amd64.deb
+Files:
+ 8bec0e7de7e36df9f378c4f188590995 872 unknown optional repokit-test-package_1.1-1.dsc
+ 823d74356b6155b43c21ed64d8b86024 2346 unknown optional repokit-test-package_1.1.orig.tar.gz
+ 076cbb35bbb4c24101b2154cf59cdd07 1672 unknown optional repokit-test-package_1.1-1.debian.tar.xz
+ 7f2184daf5ab41e6387a5f76f5f502a0 3957 unknown optional repokit-test-package_1.1-1_amd64.buildinfo
+ f595a7bf6c31968d5fd29f2830d83fe8 2284 unknown optional repokit-test-package_1.1-1_amd64.deb
