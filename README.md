@@ -9,15 +9,6 @@ the database, so `publish` only re-emits them — unlike freight-style tools tha
 recompute on every run. Multiple distros and multiple suites per distro are
 supported with isolated per-(distro, suite) pools (no cross-suite dedup).
 
-> **Breaking change**: as of this release the state dir (`repo.db` +
-> `config.yaml`) and the public apt tree (`<distro>/pool/` +
-> `<distro>/dists/`) live in separate directories. `REPOKIT_ROOT` now points
-> at the state dir only and defaults to `~/.repokit/`; the public dir is
-> configured via `public_dir` in `config.yaml` (or `--public` /
-> `$REPOKIT_PUBLIC`). See [Layout](#layout) and [Quickstart](#quickstart)
-> below. There is no migration helper — move existing `<distro>/` trees
-> into the new public dir manually.
-
 ## Build
 
 ```
