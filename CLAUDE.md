@@ -1,5 +1,78 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+`repokit` is a minimal Debian apt repository manager. It maintains static
+per-distro `<distro>/pool/` + `<distro>/dists/` trees backed by SQLite, with
+explicit publish-and-sign and atomic dist swaps. Hashes are computed once at
+`add` and persisted; `publish` only re-emits them.
+
+Module path: `github.com/alkk/repokit`. Single binary at `cmd/repokit`.
+
+## Common commands
+
+| Command | Purpose |
+|---|---|
+| `make build` | builds `.bin/repokit` (and `.bin/repokit.<branch>`) with embedded `main.revision` |
+| `make test` | `go test -race -coverprofile` over all packages, mocks stripped from coverage |
+| `make race` | quick race sweep, 60s timeout |
+| `make lint` | `golangci-lint run` |
+| `make fmt` | `gofmt -s` + `goimports` (skips `vendor/` and `mocks/`) |
+| `make version` | print the revision string the build would embed |
+
+Run a single test: `go test ./pkg/cli -run TestList -count=1` (use `-race` to
+match CI). Vendored deps live in `vendor/` — `go build`/`go test` use them
+automatically.
+
+## Architecture
+
+Subcommand dispatch is centralized in `pkg/cli/root.go` via a single
+`jessevdk/go-flags` parser. Each subcommand is a `*Cmd` struct on `Options`
+with its flags as struct tags; `Run()` resolves the repo root, builds a shared
+`Context`, and dispatches by `parser.Active.Name`. Adding a subcommand means
+adding a field to `Options`, a case in the `switch`, and a `<name>.go` file in
+`pkg/cli/`.
+
+Flow of a typical write command (`add`, `delete`, `publish`):
+
+1. `pkg/cli/<cmd>.go` parses flags, validates scope names with
+   `validateScopeName` / `requireScopeName` (defends against path traversal
+   into `dists/`/`pool/` and against Release-header injection; also reserves
+   `.new`/`.old` suite suffixes for publish staging).
+2. `pkg/repo` opens `repo.db` (modernc.org/sqlite, pure Go), runs any pending
+   migrations from `pkg/repo/migrate.go`, and exposes typed queries in
+   `pkg/repo/queries.go`. All multi-step writes happen inside a single
+   transaction.
+3. `pkg/deb` parses `.deb` control metadata; `pkg/pool` writes pool files
+   (with `pool_unix.go` / `pool_windows.go` split for atomic rename
+   semantics).
+4. `publish` rebuilds `<distro>/dists/<suite>.new/` via `pkg/index`
+   (`packages.go` for `Packages{,.gz,.xz}`, `release.go` for `Release` /
+   `InRelease` / `Release.gpg`), signs through `pkg/sign` (gpg-agent; never
+   prompts), then atomically swaps `.new` → live → `.old` and cleans up. The
+   `<suite>.new` staging dir is also cleaned on failure.
+
+Repo-root resolution: `--repo` > `$REPOKIT_ROOT` > cwd. Every command except
+`init` and `info` requires `repo.db` at the resolved root.
+
+Signing: `pkg/sign/gpg.go` shells out to `gpg` and relies entirely on
+`gpg-agent` for the passphrase — `repokit` never prompts. `pkg/sign/nop.go`
+backs `--no-sign`.
+
+Tests: each `pkg/cli/*.go` has a sibling `*_test.go`. `integration_test.go`
+and `integration_realpkg_test.go` (the latter consumes prebuilt fixtures from
+`test-packages/`) exercise full end-to-end repo creation, publish, and
+verify.
+
 ## Gotchas
 
 - Goreleaser v2 deprecated `archives.builds` and `nfpms.builds`; use `ids:` instead.
+- `go-flags` aliases: `command:"list" alias:"ls"` — `parser.Active.Name`
+  still returns the canonical `"list"`, so the dispatch `switch` does not
+  need a separate case for the alias.
+- Suite names ending in `.new` / `.old` are rejected at flag-validation time
+  because publish uses those siblings as staging dirs and would wipe them.
+- `--replace` on `add` accepts only one `.deb` per invocation (rolling back
+  an overwritten pool file is unsafe inside a multi-package batch).
