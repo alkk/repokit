@@ -80,7 +80,7 @@ type Options struct {
 	Init    InitCmd    `command:"init" description:"initialize a new repository"`
 	Add     AddCmd     `command:"add" description:"add one or more .deb packages to a suite"`
 	Delete  DeleteCmd  `command:"delete" description:"delete packages from a suite"`
-	List    ListCmd    `command:"list" description:"list packages"`
+	List    ListCmd    `command:"list" alias:"ls" description:"list packages"`
 	Search  SearchCmd  `command:"search" description:"search packages by name or description"`
 	Publish PublishCmd `command:"publish" description:"rebuild and sign dists/ for one or more suites"`
 	Verify  VerifyCmd  `command:"verify" description:"verify pool file hashes against the database"`
