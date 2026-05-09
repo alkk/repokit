@@ -24,18 +24,18 @@ func realPkg(t *testing.T, rel string) string {
 	return abs
 }
 
-// findPoolFile walks <root>/<distro>/pool/ and returns the first repo-root
-// relative path whose basename equals name, or "" when not found.
-func findPoolFile(t *testing.T, root, distro, name string) string {
+// findPoolFile walks <publicDir>/<distro>/pool/ and returns the first
+// publicDir-relative path whose basename equals name, or "" when not found.
+func findPoolFile(t *testing.T, publicDir, distro, name string) string {
 	t.Helper()
 	var hit string
-	err := filepath.WalkDir(filepath.Join(root, distro, "pool"),
+	err := filepath.WalkDir(filepath.Join(publicDir, distro, "pool"),
 		func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if !d.IsDir() && d.Name() == name {
-				rel, rerr := filepath.Rel(root, p)
+				rel, rerr := filepath.Rel(publicDir, p)
 				if rerr != nil {
 					return rerr //nolint:wrapcheck // surfaced verbatim to caller's require.NoError
 				}
@@ -62,13 +62,16 @@ func sha256Hex(t *testing.T, path string) string {
 // versions of the same package, an arch=all binary, and three binary outputs
 // produced from one source so pool sharding routes them under the Source
 // shard rather than each binary's own first letter.
+//
+// This case exercises the --public flag path with split state/public dirs.
 func TestIntegration_RealPackages(t *testing.T) {
-	root := t.TempDir()
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
 
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", root, name}, args...),
+		code := Run(append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...),
 			&stdout, &stderr, "test-rev")
 		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
 	}
@@ -113,7 +116,7 @@ func TestIntegration_RealPackages(t *testing.T) {
 
 	runCmd("publish", "--no-sign")
 
-	suiteDir := filepath.Join(root, "debian", "dists", "bookworm")
+	suiteDir := filepath.Join(tmpPublic, "debian", "dists", "bookworm")
 
 	t.Run("multi_version_per_arch", func(t *testing.T) {
 		for _, arch := range arches {
@@ -152,7 +155,7 @@ func TestIntegration_RealPackages(t *testing.T) {
 			"repokit-test-multibin-common_1:1.0-1_all.deb",
 			"repokit-test-multibin-dev_1:1.0-1_amd64.deb",
 		} {
-			got := findPoolFile(t, root, "debian", name)
+			got := findPoolFile(t, tmpPublic, "debian", name)
 			require.NotEmptyf(t, got, "%s missing from pool", name)
 			assert.Containsf(t, got, "/main/r/repokit-test-multibin/",
 				"%s should shard under the source name (got %s)", name, got)
@@ -178,10 +181,10 @@ func TestIntegration_RealPackages(t *testing.T) {
 			},
 		}
 		for _, tc := range check {
-			poolRel := findPoolFile(t, root, "debian", tc.poolName)
+			poolRel := findPoolFile(t, tmpPublic, "debian", tc.poolName)
 			require.NotEmpty(t, poolRel, tc.poolName)
 			assert.Equalf(t, sha256Hex(t, tc.src),
-				sha256Hex(t, filepath.Join(root, filepath.FromSlash(poolRel))),
+				sha256Hex(t, filepath.Join(tmpPublic, filepath.FromSlash(poolRel))),
 				"pool file %s must be byte-identical to %s", tc.poolName, tc.src)
 		}
 	})
@@ -216,4 +219,6 @@ func TestIntegration_RealPackages(t *testing.T) {
 			assert.Containsf(t, stanza, want, "stanza missing %q", want)
 		}
 	})
+
+	assertStateDirIsPrivate(t, tmpState)
 }

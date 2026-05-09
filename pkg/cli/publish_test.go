@@ -41,10 +41,11 @@ func (failingSigner) Sign(_ context.Context, _ string) error {
 
 // insertPackage writes one row directly into the repo, bypassing add. Used by
 // publish tests that need shapes (e.g. arch=arm64 or arch=all) for which we
-// don't have a real .deb fixture.
-func insertPackage(t *testing.T, root string, p repo.Package) {
+// don't have a real .deb fixture. state is the state-dir root (where repo.db
+// lives), not the public dir.
+func insertPackage(t *testing.T, state string, p repo.Package) {
 	t.Helper()
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(state, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 	require.NoError(t, r.Tx(context.Background(), func(tx *sql.Tx) error {
@@ -53,15 +54,16 @@ func insertPackage(t *testing.T, root string, p repo.Package) {
 }
 
 // fakePackage builds a Package whose hashes/size are valid for the supplied
-// body, with a minimal control stanza. The pool file is also written so a
-// caller can verify atomic swaps don't disturb pool/. Component is fixed at
-// "main" — multi-component scenarios live in the dedicated integration test.
-func fakePackage(t *testing.T, root, distro, suite, arch, name, version string) repo.Package {
+// body, with a minimal control stanza. The pool file is also written under
+// publicDir so a caller can verify atomic swaps don't disturb pool/. Component
+// is fixed at "main" — multi-component scenarios live in the dedicated
+// integration test.
+func fakePackage(t *testing.T, publicDir, distro, suite, arch, name, version string) repo.Package {
 	t.Helper()
 	const component = "main"
 	body := []byte("fake .deb body for " + name + "_" + version + "_" + arch)
 	filename := pool.Filename(suite, component, name, name, version, arch)
-	full := filepath.Join(root, filepath.FromSlash(pool.DiskPath(distro, filename)))
+	full := filepath.Join(publicDir, filepath.FromSlash(pool.DiskPath(distro, filename)))
 	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
 	require.NoError(t, os.WriteFile(full, body, 0o644))
 
@@ -94,17 +96,18 @@ func hashHex(h hash.Hash, body []byte) string {
 }
 
 func TestPublishEmptySuite(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	releasePath := filepath.Join(root, "debian", "dists", "bookworm", "Release")
+	releasePath := filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release")
 	body, err := os.ReadFile(releasePath)
 	require.NoError(t, err)
 	out := string(body)
@@ -119,31 +122,34 @@ func TestPublishEmptySuite(t *testing.T) {
 			"empty-suite Release should have no checksum entries: %q", line)
 	}
 
-	assert.FileExists(t, filepath.Join(root, "debian", "dists", "bookworm", "InRelease"))
-	assert.FileExists(t, filepath.Join(root, "debian", "dists", "bookworm", "Release.gpg"))
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm", "InRelease"))
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release.gpg"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.new"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.old"))
+	assert.NoDirExists(t, filepath.Join(tmpState, "debian"),
+		"state dir must not gain a per-distro tree")
 }
 
 func TestPublishMultiArch(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "arm64", "alpha", "1.0"))
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "all", "common", "2.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "arm64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "all", "common", "2.0"))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	dists := filepath.Join(root, "debian", "dists", "bookworm")
+	dists := filepath.Join(tmpPublic, "debian", "dists", "bookworm")
 
 	assert.NoDirExists(t, filepath.Join(dists, "..", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "binary-all"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "binary-all"))
 
 	for _, arch := range []string{"amd64", "arm64"} {
 		dir := filepath.Join(dists, "main", "binary-"+arch)
@@ -175,22 +181,23 @@ func TestPublishMultiArch(t *testing.T) {
 // silently invisible to apt clients. publish must reject this scope with a
 // clear error rather than emit an empty Release.
 func TestPublishRejectsArchAllOnlySuite(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "all", "common", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "all", "common", "1.0"))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	assert.Equal(t, ExitError, code)
 	assert.Contains(t, stderr.String(), "arch=all")
 	assert.Contains(t, stderr.String(), "concrete-architecture")
 
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm"))
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.new"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.old"))
 }
 
 // TestPublishRecoversLiveFromOldEvenForArchAllOnlySuite guards against a
@@ -201,11 +208,12 @@ func TestPublishRejectsArchAllOnlySuite(t *testing.T) {
 // live before aborting. Otherwise the suite stays unavailable to apt and
 // stale .new/.old siblings are never reaped.
 func TestPublishRecoversLiveFromOldEvenForArchAllOnlySuite(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "all", "common", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "all", "common", "1.0"))
 
-	distsParent := filepath.Join(root, "debian", "dists")
+	distsParent := filepath.Join(tmpPublic, "debian", "dists")
 	livePath := filepath.Join(distsParent, "bookworm")
 	oldPath := livePath + ".old"
 	newPath := livePath + ".new"
@@ -216,7 +224,7 @@ func TestPublishRecoversLiveFromOldEvenForArchAllOnlySuite(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	assert.Equal(t, ExitError, code)
@@ -239,10 +247,11 @@ func TestPublishMissingDistroOrSuite(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			initRepoForTest(t, root)
+			tmpState := t.TempDir()
+			tmpPublic := t.TempDir()
+			initRepoForTest(t, tmpState)
 
-			full := append([]string{"--repo", root, "publish"}, tc.args...)
+			full := append([]string{"--repo", tmpState, "--public", tmpPublic, "publish"}, tc.args...)
 			full = append(full, "--no-sign")
 			var stdout, stderr bytes.Buffer
 			code := Run(full, &stdout, &stderr, "test-rev")
@@ -253,20 +262,21 @@ func TestPublishMissingDistroOrSuite(t *testing.T) {
 }
 
 func TestPublishAllScopesWhenBothEmpty(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
-	insertPackage(t, root, fakePackage(t, root, "ubuntu", "noble", "amd64", "bravo", "2.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "ubuntu", "noble", "amd64", "bravo", "2.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "publish", "--no-sign"},
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 2 suite(s)")
 
-	assert.FileExists(t, filepath.Join(root, "debian", "dists", "bookworm", "Release"))
-	assert.FileExists(t, filepath.Join(root, "ubuntu", "dists", "noble", "Release"))
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release"))
+	assert.FileExists(t, filepath.Join(tmpPublic, "ubuntu", "dists", "noble", "Release"))
 }
 
 // TestPublishAllScopesIncludesEmptiedSuites guards against `repokit publish`
@@ -274,22 +284,23 @@ func TestPublishAllScopesWhenBothEmpty(t *testing.T) {
 // must be republished so the stale Packages/Release files do not keep
 // pointing at packages that no longer exist.
 func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
-	args := []string{"--repo", root, "publish", "--no-sign"}
+	args := []string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"}
 	var stdout, stderr bytes.Buffer
 	code := Run(args, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
 
-	pkgPath := filepath.Join(root, "debian", "dists", "bookworm", "main", "binary-amd64", "Packages")
+	pkgPath := filepath.Join(tmpPublic, "debian", "dists", "bookworm", "main", "binary-amd64", "Packages")
 	body, err := os.ReadFile(pkgPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "Package: alpha\n")
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	require.NoError(t, r.Tx(context.Background(), func(tx *sql.Tx) error {
 		_, derr := r.Delete(context.Background(), tx, repo.Filter{
@@ -311,7 +322,7 @@ func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
 	assert.NoFileExists(t, pkgPath,
 		"binary-arch tree should be wiped when the suite has no packages")
 
-	releaseBody, err := os.ReadFile(filepath.Join(root, "debian", "dists", "bookworm", "Release"))
+	releaseBody, err := os.ReadFile(filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release"))
 	require.NoError(t, err)
 	out := string(releaseBody)
 	assert.Contains(t, out, "Architectures: \n")
@@ -323,16 +334,17 @@ func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
 // previously published (i.e. carrying a Release file) are valid republish
 // targets discovered from the filesystem.
 func TestPublishAllScopesIgnoresStrayDirsWithoutRelease(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	stray := filepath.Join(root, "debian", "dists", "notes")
+	stray := filepath.Join(tmpPublic, "debian", "dists", "notes")
 	require.NoError(t, os.MkdirAll(stray, 0o755))
 	strayFile := filepath.Join(stray, "readme.txt")
 	require.NoError(t, os.WriteFile(strayFile, []byte("not managed by repokit\n"), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "publish", "--no-sign"},
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "no suites to publish")
@@ -342,32 +354,33 @@ func TestPublishAllScopesIgnoresStrayDirsWithoutRelease(t *testing.T) {
 }
 
 func TestPublishAtomicSwapReplacesLive(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
-	args := []string{"--repo", root, "publish", "--distro", "debian", "--suite", "bookworm", "--no-sign"}
+	args := []string{"--repo", tmpState, "--public", tmpPublic, "publish", "--distro", "debian", "--suite", "bookworm", "--no-sign"}
 	var stdout, stderr bytes.Buffer
 	code := Run(args, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
 
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "2.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "2.0"))
 
 	stdout.Reset()
 	stderr.Reset()
 	code = Run(args, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "second publish: %s", stderr.String())
 
-	body, err := os.ReadFile(filepath.Join(root, "debian", "dists", "bookworm",
+	body, err := os.ReadFile(filepath.Join(tmpPublic, "debian", "dists", "bookworm",
 		"main", "binary-amd64", "Packages"))
 	require.NoError(t, err)
 	txt := string(body)
 	assert.Contains(t, txt, "Version: 1.0\n")
 	assert.Contains(t, txt, "Version: 2.0\n")
 
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.new"))
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.new"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.old"))
 }
 
 // TestPublishCleansStaleStagingDirs ensures publish wipes any leftover
@@ -385,11 +398,12 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			initRepoForTest(t, root)
-			insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+			tmpState := t.TempDir()
+			tmpPublic := t.TempDir()
+			initRepoForTest(t, tmpState)
+			insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
-			distsParent := filepath.Join(root, "debian", "dists")
+			distsParent := filepath.Join(tmpPublic, "debian", "dists")
 			require.NoError(t, os.MkdirAll(distsParent, 0o755))
 			newPath := filepath.Join(distsParent, "bookworm.new")
 			oldPath := filepath.Join(distsParent, "bookworm.old")
@@ -404,7 +418,7 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 
 			var stdout, stderr bytes.Buffer
 			code := Run([]string{
-				"--repo", root, "publish",
+				"--repo", tmpState, "--public", tmpPublic, "publish",
 				"--distro", "debian", "--suite", "bookworm", "--no-sign",
 			}, &stdout, &stderr, "test-rev")
 			require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
@@ -424,24 +438,25 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 // Bypasses Run([]string{...}) because pickSigner cannot be subbed through
 // that public seam.
 func TestPublishRemovesStagingOnFailure(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 
 	cfg := &config.Config{Suites: map[string]config.SuiteConfig{}}
-	err = publishScope(context.Background(), root, r, cfg, failingSigner{}, "debian", "bookworm")
+	err = publishScope(context.Background(), tmpPublic, r, cfg, failingSigner{}, "debian", "bookworm")
 	require.Error(t, err, "failingSigner must propagate an error")
 	assert.Contains(t, err.Error(), "signing Release")
 
-	newPath := filepath.Join(root, "debian", "dists", "bookworm.new")
+	newPath := filepath.Join(tmpPublic, "debian", "dists", "bookworm.new")
 	assert.NoDirExists(t, newPath, "deferred cleanup must remove .new on failure")
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm"),
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm"),
 		"live tree must not exist when publish never reaches swapDists")
-	assert.NoDirExists(t, filepath.Join(root, "debian", "dists", "bookworm.old"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm.old"))
 }
 
 // TestPublishPreservesLiveTreeOnFailure guards against a failed second publish
@@ -451,18 +466,19 @@ func TestPublishRemovesStagingOnFailure(t *testing.T) {
 // live tree byte-for-byte identical, and remove the staging .new sibling so
 // nothing leaks past the deferred cleanup.
 func TestPublishPreservesLiveTreeOnFailure(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
 
-	livePath := filepath.Join(root, "debian", "dists", "bookworm")
+	livePath := filepath.Join(tmpPublic, "debian", "dists", "bookworm")
 	releasePath := filepath.Join(livePath, "Release")
 	releaseBefore, err := os.ReadFile(releasePath)
 	require.NoError(t, err)
@@ -470,12 +486,12 @@ func TestPublishPreservesLiveTreeOnFailure(t *testing.T) {
 	pkgBefore, err := os.ReadFile(pkgPath)
 	require.NoError(t, err)
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 
 	cfg := &config.Config{Suites: map[string]config.SuiteConfig{}}
-	err = publishScope(context.Background(), root, r, cfg, failingSigner{}, "debian", "bookworm")
+	err = publishScope(context.Background(), tmpPublic, r, cfg, failingSigner{}, "debian", "bookworm")
 	require.Error(t, err, "failingSigner must propagate an error")
 	assert.Contains(t, err.Error(), "signing Release")
 
@@ -496,18 +512,19 @@ func TestPublishPreservesLiveTreeOnFailure(t *testing.T) {
 // asserts they round-trip to byte-identical Packages bytes — guards against
 // fan-out writer bugs in WritePackagesAll seen through the publish command.
 func TestPublishGzAndXzMatchPlain(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 
-	dir := filepath.Join(root, "debian", "dists", "bookworm", "main", "binary-amd64")
+	dir := filepath.Join(tmpPublic, "debian", "dists", "bookworm", "main", "binary-amd64")
 	plain, err := os.ReadFile(filepath.Join(dir, "Packages"))
 	require.NoError(t, err)
 
@@ -535,15 +552,16 @@ func TestPublishGzAndXzMatchPlain(t *testing.T) {
 // silently published as unvalidated scopes. Such names cannot be created via
 // `add` and should not be picked up by a no-flags publish either.
 func TestPublishAllScopesSkipsInvalidDiscoveredScopeNames(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	stray := filepath.Join(root, "debian", "dists", "-evil")
+	stray := filepath.Join(tmpPublic, "debian", "dists", "-evil")
 	require.NoError(t, os.MkdirAll(stray, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stray, "Release"), []byte("Origin: forged\n"), 0o644))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "publish", "--no-sign"},
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "no suites to publish")
@@ -561,13 +579,14 @@ func TestPublishAllScopesSkipsInvalidDiscoveredScopeNames(t *testing.T) {
 // or a bug-bypass path; the publish loop must still refuse to derive
 // dists/<distro>/<suite> from such names.
 func TestPublishAllScopesSkipsInvalidDBScopeNames(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	good := fakePackage(t, root, "debian", "bookworm", "amd64", "hello", "1.0")
-	insertPackage(t, root, good)
+	good := fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "hello", "1.0")
+	insertPackage(t, tmpState, good)
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 	_, err = r.DB().ExecContext(context.Background(),
@@ -585,18 +604,46 @@ func TestPublishAllScopesSkipsInvalidDBScopeNames(t *testing.T) {
 	require.NoError(t, r.Close())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "publish", "--no-sign"},
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 1 suite(s)")
 
-	assert.DirExists(t, filepath.Join(root, "debian", "dists", "bookworm"))
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm"))
 	// Without the dbScopes filter, publishScope on (debian, "..") would
-	// resolve livePath to root/debian, leaving sibling staging dirs like
-	// root/debian.new and root/debian.old as evidence; their absence proves
-	// the bad row never reached the swap logic.
-	assert.NoDirExists(t, filepath.Join(root, "debian.new"))
-	assert.NoDirExists(t, filepath.Join(root, "debian.old"))
+	// resolve livePath to publicDir/debian, leaving sibling staging dirs like
+	// publicDir/debian.new and publicDir/debian.old as evidence; their absence
+	// proves the bad row never reached the swap logic.
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian.new"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian.old"))
+}
+
+// TestPublishWalksPublicDirNotState is a regression check that filesystem
+// scope discovery reads from ctx.PublicDir, not ctx.Root. A dists/<suite>
+// tree planted in the state dir must not be picked up by a no-flags publish:
+// the state dir is meant to hold only repo.db / config.yaml.
+func TestPublishWalksPublicDirNotState(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+
+	statePath := filepath.Join(tmpState, "debian", "dists", "bookworm")
+	require.NoError(t, os.MkdirAll(statePath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(statePath, "Release"),
+		[]byte("Origin: forged\n"), 0o644))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+		&stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "no suites to publish",
+		"trap dists tree in state must not be discovered as a publish target")
+
+	assert.DirExists(t, statePath, "state-side tree must be untouched")
+	assert.NoDirExists(t, statePath+suiteSuffixNew)
+	assert.NoDirExists(t, statePath+suiteSuffixOld)
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian"),
+		"public dir must not gain a debian/ tree from a no-op publish")
 }
 
 // TestSwapDistsRestoresLiveOnPromoteFailure ensures that when the .new → live
@@ -627,20 +674,21 @@ func TestSwapDistsRestoresLiveOnPromoteFailure(t *testing.T) {
 // dropping the meta key — without an end-to-end assertion, a refactor could
 // remove the call and tests would still pass.
 func TestPublishRecordsLastPublishTimestamp(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
 	before := time.Now().Unix()
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
 	after := time.Now().Unix()
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 	var raw string
@@ -652,19 +700,20 @@ func TestPublishRecordsLastPublishTimestamp(t *testing.T) {
 	assert.LessOrEqual(t, got, after, "timestamp must not postdate the publish call")
 }
 
-// TestPublishRejectsMalformedConfig covers the loadPublishConfig parse-error
+// TestPublishRejectsMalformedConfig covers the loadConfig parse-error
 // branch — without it, a regression that swallows the YAML error would let
 // publish proceed against a partially-populated config.
 func TestPublishRejectsMalformedConfig(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	require.NoError(t, os.WriteFile(filepath.Join(root, "config.yaml"),
+	require.NoError(t, os.WriteFile(filepath.Join(tmpState, "config.yaml"),
 		[]byte("origin: ok\nsuites: [oops"), 0o600))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
 	assert.Equal(t, ExitError, code)
@@ -674,22 +723,35 @@ func TestPublishRejectsMalformedConfig(t *testing.T) {
 // TestPublishRequiresSigningKeyWithoutNoSign covers pickSigner's empty-key
 // guard — every other publish test uses --no-sign, so the failure path is
 // otherwise unexercised. The starter config.yaml ships with a non-empty
-// REPLACE_ME, so the test removes it to drive loadPublishConfig down the
-// "no config" branch where SigningKey defaults to empty.
+// REPLACE_ME for signing_key, so the test removes the file to drive loadConfig
+// down the "no config" branch where SigningKey defaults to empty. --public is
+// passed explicitly so resolvePublicDir succeeds and pickSigner is reached.
 func TestPublishRequiresSigningKeyWithoutNoSign(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
-	require.NoError(t, os.Remove(filepath.Join(root, "config.yaml")))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	require.NoError(t, os.Remove(filepath.Join(tmpState, "config.yaml")))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "publish",
+		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm",
 	}, &stdout, &stderr, "test-rev")
 	assert.Equal(t, ExitError, code)
 	assert.Contains(t, stderr.String(), "signing_key")
 	assert.Contains(t, stderr.String(), "--no-sign")
+}
+
+// TestPickSignerRejectsWhitespaceKey guards the gpg argv path: a
+// whitespace-only signing_key is tolerated at config-load time (so
+// add/delete/verify don't regress) but must fail before being passed to
+// gpg, where it would otherwise produce a confusing late error.
+func TestPickSignerRejectsWhitespaceKey(t *testing.T) {
+	_, err := pickSigner(false, "   ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "signing_key")
+	assert.Contains(t, err.Error(), "--no-sign")
 }
 
 // TestCleanStagingRecoversLiveFromOldWhenLiveMissing simulates the
@@ -725,11 +787,12 @@ func TestCleanStagingRecoversLiveFromOldWhenLiveMissing(t *testing.T) {
 // swapDists. Holding a writer lock from a separate connection (mimicking
 // either case) must block publish until release.
 func TestPublishSerializesWithConcurrentWriter(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	insertPackage(t, root, fakePackage(t, root, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 
@@ -754,7 +817,7 @@ func TestPublishSerializesWithConcurrentWriter(t *testing.T) {
 	go func() {
 		var stdout, stderr bytes.Buffer
 		code := Run([]string{
-			"--repo", root, "publish", "--no-sign",
+			"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign",
 			"--distro", "debian", "--suite", "bookworm",
 		}, &stdout, &stderr, "test-rev")
 		publishDone <- struct {

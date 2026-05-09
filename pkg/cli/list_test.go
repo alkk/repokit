@@ -11,8 +11,9 @@ import (
 )
 
 // seedTwoSuites adds gz fixture into bookworm and xz fixture into bullseye so
-// list/search tests have two distinct rows to filter against.
-func seedTwoSuites(t *testing.T, root string) {
+// list/search tests have two distinct rows to filter against. Pool I/O lands
+// under public; the DB lives under state.
+func seedTwoSuites(t *testing.T, state, public string) {
 	t.Helper()
 	for _, tc := range []struct {
 		suite string
@@ -23,7 +24,7 @@ func seedTwoSuites(t *testing.T, root string) {
 	} {
 		var stdout, stderr bytes.Buffer
 		code := Run([]string{
-			"--repo", root, "add",
+			"--repo", state, "--public", public, "add",
 			"--distro", "debian", "--suite", tc.suite,
 			tc.deb,
 		}, &stdout, &stderr, "test-rev")
@@ -33,8 +34,9 @@ func seedTwoSuites(t *testing.T, root string) {
 
 func TestListTableShowsHeaderAndRows(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
@@ -55,8 +57,9 @@ func TestListTableShowsHeaderAndRows(t *testing.T) {
 
 func TestListFiltersBySuite(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
@@ -71,8 +74,9 @@ func TestListFiltersBySuite(t *testing.T) {
 
 func TestListFiltersByName(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
@@ -97,8 +101,9 @@ func TestListEmptyTableSilent(t *testing.T) {
 
 func TestListJSONFormat(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{

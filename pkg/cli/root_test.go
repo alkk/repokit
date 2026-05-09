@@ -2,60 +2,88 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/alkk/repokit/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestResolveRepoRoot(t *testing.T) {
-	t.Run("flag wins over env and cwd", func(t *testing.T) {
+	t.Run("flag wins over env and default", func(t *testing.T) {
 		flagDir := t.TempDir()
 		envDir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(flagDir, dbFilename), nil, 0o600))
 		require.NoError(t, os.WriteFile(filepath.Join(envDir, dbFilename), nil, 0o600))
 		t.Setenv(envRepo, envDir)
+		withDefaultStateDir(t, t.TempDir())
 
 		root, err := resolveRepoRoot(flagDir, "list")
 		require.NoError(t, err)
 		assert.Equal(t, flagDir, root)
 	})
 
-	t.Run("env wins over cwd", func(t *testing.T) {
+	t.Run("env wins over default", func(t *testing.T) {
 		envDir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(envDir, dbFilename), nil, 0o600))
 		t.Setenv(envRepo, envDir)
+		withDefaultStateDir(t, t.TempDir())
 
 		root, err := resolveRepoRoot("", "list")
 		require.NoError(t, err)
 		assert.Equal(t, envDir, root)
 	})
 
-	t.Run("cwd fallback requires repo.db", func(t *testing.T) {
-		empty := t.TempDir()
+	t.Run("default applies for non-init when populated", func(t *testing.T) {
+		defaultDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(defaultDir, dbFilename), nil, 0o600))
 		t.Setenv(envRepo, "")
-		t.Chdir(empty)
+		withDefaultStateDir(t, defaultDir)
 
-		_, err := resolveRepoRoot("", "list")
+		root, err := resolveRepoRoot("", "add")
+		require.NoError(t, err)
+		// On macOS the temp dir is symlinked through /private; compare resolved paths.
+		got, _ := filepath.EvalSymlinks(root)
+		want, _ := filepath.EvalSymlinks(defaultDir)
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("default applies for non-init when empty returns ErrRepoNotFound", func(t *testing.T) {
+		defaultDir := t.TempDir()
+		t.Setenv(envRepo, "")
+		withDefaultStateDir(t, defaultDir)
+
+		_, err := resolveRepoRoot("", "add")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrRepoNotFound)
 	})
 
-	t.Run("cwd fallback succeeds when repo.db present", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, dbFilename), nil, 0o600))
+	t.Run("default applies for init even when empty", func(t *testing.T) {
+		defaultDir := t.TempDir()
 		t.Setenv(envRepo, "")
-		t.Chdir(dir)
+		withDefaultStateDir(t, defaultDir)
 
-		root, err := resolveRepoRoot("", "list")
+		root, err := resolveRepoRoot("", "init")
 		require.NoError(t, err)
-		// On macOS the temp dir is symlinked through /private; compare resolved paths.
-		got, _ := filepath.EvalSymlinks(root)
-		want, _ := filepath.EvalSymlinks(dir)
-		assert.Equal(t, want, got)
+		assert.Equal(t, defaultDir, root)
+	})
+
+	t.Run("cwd is not consulted", func(t *testing.T) {
+		// place repo.db in cwd to prove resolution does not fall back to it.
+		cwd := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(cwd, dbFilename), nil, 0o600))
+		emptyDefault := t.TempDir()
+		t.Setenv(envRepo, "")
+		t.Chdir(cwd)
+		withDefaultStateDir(t, emptyDefault)
+
+		_, err := resolveRepoRoot("", "list")
+		require.Error(t, err, "cwd should be ignored even when it contains repo.db")
+		assert.ErrorIs(t, err, ErrRepoNotFound)
 	})
 
 	t.Run("init does not require repo.db", func(t *testing.T) {
@@ -208,18 +236,20 @@ func TestDistroPathTraversalRejected(t *testing.T) {
 		for _, tc := range traversals {
 			t.Run(c.name+"/"+tc.name, func(t *testing.T) {
 				root := t.TempDir()
+				public := t.TempDir()
 				initRepoForTest(t, root)
 				before := snapshotRoot(t, root)
+				beforePublic := snapshotRoot(t, public)
 
-				args := append([]string{"--repo", root}, c.args(tc.distro)...)
+				args := append([]string{"--repo", root, "--public", public}, c.args(tc.distro)...)
 				var stdout, stderr bytes.Buffer
 				code := Run(args, &stdout, &stderr, "test-rev")
 
 				require.NotEqualf(t, ExitOK, code, "expected non-zero exit; stderr=%s", stderr.String())
 				assert.Contains(t, stderr.String(), "--distro", "error should name the rejected flag")
 
-				after := snapshotRoot(t, root)
-				assert.Equal(t, before, after, "no filesystem mutation expected on a rejected --distro")
+				assert.Equal(t, before, snapshotRoot(t, root), "no state-dir mutation expected on a rejected --distro")
+				assert.Equal(t, beforePublic, snapshotRoot(t, public), "no public-dir mutation expected on a rejected --distro")
 			})
 		}
 	}
@@ -246,3 +276,341 @@ func snapshotRoot(t *testing.T, root string) []string {
 	return out
 }
 
+func TestNeedsPublic(t *testing.T) {
+	cases := map[string]bool{
+		"add":     true,
+		"delete":  true,
+		"publish": true,
+		"verify":  true,
+		"init":    false,
+		"info":    false,
+		"list":    false,
+		"search":  false,
+		"":        false,
+		"unknown": false,
+	}
+	for cmd, want := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			assert.Equal(t, want, needsPublic(cmd))
+		})
+	}
+}
+
+func TestLoadConfig(t *testing.T) {
+	t.Run("missing file returns empty config", func(t *testing.T) {
+		root := t.TempDir()
+		cfg, err := loadConfig(root)
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		assert.Empty(t, cfg.SigningKey)
+		assert.Empty(t, cfg.PublicDir)
+		assert.NotNil(t, cfg.Suites)
+	})
+
+	t.Run("parses populated config", func(t *testing.T) {
+		root := t.TempDir()
+		body := "signing_key: \"ABC123\"\npublic_dir: \"/srv/public\"\n"
+		require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
+		cfg, err := loadConfig(root)
+		require.NoError(t, err)
+		assert.Equal(t, "ABC123", cfg.SigningKey)
+		assert.Equal(t, "/srv/public", cfg.PublicDir)
+	})
+
+	t.Run("malformed yaml returns wrapped error", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, configFilename),
+			[]byte("signing_key: ok\nsuites: [oops"), 0o600))
+		_, err := loadConfig(root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "loading config")
+	})
+}
+
+func TestResolvePublicDir(t *testing.T) {
+	t.Run("flag wins over config", func(t *testing.T) {
+		root := t.TempDir()
+		flagDir := t.TempDir()
+		cfgDir := t.TempDir()
+		cfg := &config.Config{PublicDir: cfgDir}
+		got, err := resolvePublicDir(flagDir, cfg, root)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Clean(flagDir), got)
+	})
+
+	t.Run("config used when flag empty", func(t *testing.T) {
+		root := t.TempDir()
+		cfgDir := t.TempDir()
+		cfg := &config.Config{PublicDir: cfgDir}
+		got, err := resolvePublicDir("", cfg, root)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Clean(cfgDir), got)
+	})
+
+	t.Run("flag REPLACE_ME falls through to config", func(t *testing.T) {
+		root := t.TempDir()
+		cfgDir := t.TempDir()
+		cfg := &config.Config{PublicDir: cfgDir}
+		got, err := resolvePublicDir(placeholderValue, cfg, root)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Clean(cfgDir), got)
+	})
+
+	t.Run("both unset errors with friendly message", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir("", &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "public_dir is not set")
+		assert.Contains(t, err.Error(), envPublic)
+		assert.Contains(t, err.Error(), filepath.Join(root, configFilename))
+	})
+
+	t.Run("config REPLACE_ME treated as missing", func(t *testing.T) {
+		root := t.TempDir()
+		cfg := &config.Config{PublicDir: placeholderValue}
+		_, err := resolvePublicDir("", cfg, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "public_dir is not set")
+	})
+
+	t.Run("nil config treated as missing", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir("", nil, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "public_dir is not set")
+	})
+
+	t.Run("relative path rejected", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir("relative/path", &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be an absolute path")
+	})
+
+	t.Run("missing directory rejected", func(t *testing.T) {
+		root := t.TempDir()
+		missing := filepath.Join(t.TempDir(), "does-not-exist")
+		_, err := resolvePublicDir(missing, &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "directory does not exist")
+		assert.Contains(t, err.Error(), "create it manually")
+	})
+
+	t.Run("non-directory rejected", func(t *testing.T) {
+		root := t.TempDir()
+		filePath := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(filePath, nil, 0o600))
+		_, err := resolvePublicDir(filePath, &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a directory")
+	})
+
+	t.Run("control char rejected", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir("/tmp/foo\nLabel: x", &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "control")
+	})
+
+	t.Run("nul byte rejected", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir("/tmp/foo\x00bar", &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "control")
+	})
+
+	t.Run("equal to root rejected", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir(root, &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not equal or be nested")
+	})
+
+	t.Run("nested inside root rejected", func(t *testing.T) {
+		root := t.TempDir()
+		nested := filepath.Join(root, "public")
+		require.NoError(t, os.MkdirAll(nested, 0o755))
+		_, err := resolvePublicDir(nested, &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not equal or be nested")
+	})
+
+	t.Run("root nested inside public rejected", func(t *testing.T) {
+		public := t.TempDir()
+		root := filepath.Join(public, "state")
+		require.NoError(t, os.MkdirAll(root, 0o755))
+		_, err := resolvePublicDir(public, &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not equal or be nested")
+	})
+
+	t.Run("sibling directories accepted", func(t *testing.T) {
+		parent := t.TempDir()
+		root := filepath.Join(parent, "state")
+		public := filepath.Join(parent, "public")
+		require.NoError(t, os.MkdirAll(root, 0o755))
+		require.NoError(t, os.MkdirAll(public, 0o755))
+		got, err := resolvePublicDir(public, &config.Config{}, root)
+		require.NoError(t, err)
+		assert.Equal(t, public, got)
+	})
+
+	t.Run("carriage return rejected", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolvePublicDir("/tmp/foo\rEvil", &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "control")
+	})
+
+	// A symlinked public dir whose target lives inside the state dir would
+	// expose repo.db / config.yaml under the webserver docroot — the exact
+	// failure mode the split was built to prevent. Lexical Rel comparison
+	// alone is not enough; resolvePublicDir must follow symlinks.
+	t.Run("symlink into state dir rejected", func(t *testing.T) {
+		root := t.TempDir()
+		realPublic := filepath.Join(root, "inside")
+		require.NoError(t, os.MkdirAll(realPublic, 0o755))
+		linkParent := t.TempDir()
+		link := filepath.Join(linkParent, "public")
+		require.NoError(t, os.Symlink(realPublic, link))
+		_, err := resolvePublicDir(link, &config.Config{}, root)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not equal or be nested")
+	})
+}
+
+func TestRunPopulatesPublicDirForNeedyCommand(t *testing.T) {
+	root := t.TempDir()
+	public := t.TempDir()
+	initRepoForTest(t, root)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "--public", public, "verify"},
+		&stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+}
+
+func TestRunUsesEnvPublic(t *testing.T) {
+	root := t.TempDir()
+	public := t.TempDir()
+	initRepoForTest(t, root)
+	t.Setenv(envPublic, public)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+}
+
+func TestRunReadsPublicDirFromConfig(t *testing.T) {
+	root := t.TempDir()
+	public := t.TempDir()
+	initRepoForTest(t, root)
+	body := "signing_key: \"ABC123\"\npublic_dir: \"" + public + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
+	t.Setenv(envPublic, "")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+}
+
+func TestRunErrorsWhenPublicMissingForNeedyCommand(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+	t.Setenv(envPublic, "")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), "public_dir is not set")
+}
+
+// TestRunVerifyToleratesMissingSigningKey guards against the regression where
+// loadConfig (called for every needsPublic command) bubbled up an
+// ErrMissingSigningKey from config.Load — breaking add/delete/verify whenever
+// signing_key was blank, even though those commands never sign.
+func TestRunVerifyToleratesMissingSigningKey(t *testing.T) {
+	root := t.TempDir()
+	public := t.TempDir()
+	initRepoForTest(t, root)
+	body := "signing_key: \"\"\npublic_dir: \"" + public + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
+	t.Setenv(envPublic, "")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+}
+
+func TestRunSkipsPublicResolutionForListAndInit(t *testing.T) {
+	root := t.TempDir()
+	initRepoForTest(t, root)
+	t.Setenv(envPublic, "")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitOK, code, "list should not require --public; stderr=%s", stderr.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	freshRoot := t.TempDir()
+	code = Run([]string{"--repo", freshRoot, "init"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitOK, code, "init should not require --public; stderr=%s", stderr.String())
+}
+
+// TestRunVerifyWithReplaceMeFallsBackToConfig guards the corner case where
+// --public / $REPOKIT_PUBLIC is set to the literal placeholder value. The
+// flag-load skip optimization must still load config.yaml in that case so
+// resolvePublicDir's REPLACE_ME-as-unset rule can fall back to public_dir
+// from config.
+func TestRunVerifyWithReplaceMeFallsBackToConfig(t *testing.T) {
+	root := t.TempDir()
+	public := t.TempDir()
+	initRepoForTest(t, root)
+	body := "signing_key: \"ABC123\"\npublic_dir: \"" + public + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
+	t.Setenv(envPublic, placeholderValue)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+}
+
+// TestRunMalformedConfigBlocksAllStateCommands asserts that any command that
+// reads the state dir surfaces a malformed config.yaml at startup, even when
+// --public is supplied and the command itself never reads cfg. Loading and
+// validating the config unconditionally is the whole point — a broken config
+// must not be ignored just because you happened to pass --public.
+func TestRunMalformedConfigBlocksAllStateCommands(t *testing.T) {
+	root := t.TempDir()
+	public := t.TempDir()
+	initRepoForTest(t, root)
+	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename),
+		[]byte("signing_key: ok\nsuites: [oops"), 0o600))
+	t.Setenv(envPublic, "")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", root, "--public", public, "verify"},
+		&stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), "loading config")
+}
+
+// TestRunInfoWithoutHomeDir guards against info regressing to require a
+// resolvable home directory. info inspects a .deb file and never reads the
+// state dir, so a defaultStateDir failure (no $HOME in minimal containers)
+// must not block it.
+func TestRunInfoWithoutHomeDir(t *testing.T) {
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	t.Setenv(envRepo, "")
+	prev := defaultStateDir
+	defaultStateDir = func() (string, error) {
+		return "", errors.New("simulated missing home")
+	}
+	t.Cleanup(func() { defaultStateDir = prev })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"info", deb}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "Package:")
+}

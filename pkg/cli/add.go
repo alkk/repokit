@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/alkk/repokit/pkg/deb"
 	"github.com/alkk/repokit/pkg/pool"
@@ -88,8 +89,8 @@ func (cmd *AddCmd) run(c *Context) error {
 		// Restore any --replace backups so the on-disk pool mirrors the
 		// rolled-back DB state. RollbackReplace handles a "" backup as a
 		// plain delete, so plain Write rollbacks flow through the same path.
-		for i := len(written) - 1; i >= 0; i-- {
-			pool.RollbackReplace(c.Root, written[i], backups[i])
+		for i := range slices.Backward(written) {
+			pool.RollbackReplace(c.PublicDir, written[i], backups[i])
 		}
 		return fmt.Errorf("staging batch: %w", txErr)
 	}
@@ -112,7 +113,7 @@ func (cmd *AddCmd) run(c *Context) error {
 	// is a benign cleanup hiccup (verify --gc reclaims the orphan); warn rather
 	// than reporting the whole add as failed.
 	for _, p := range staleReplaced {
-		if err := pool.Delete(c.Root, p); err != nil {
+		if err := pool.Delete(c.PublicDir, p); err != nil {
 			fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, err)
 		}
 	}
@@ -191,7 +192,7 @@ func (cmd *AddCmd) processOne(
 		return "", "", "", fmt.Errorf("inserting %s: %w", pkg.Name, ierr)
 	}
 
-	backup, werr := writePool(c.Root, diskPath, srcPath, cmd.Replace)
+	backup, werr := writePool(c.PublicDir, diskPath, srcPath, cmd.Replace)
 	if werr != nil {
 		return "", "", "", werr
 	}
@@ -218,7 +219,7 @@ func (cmd *AddCmd) reconcileBackup(ctx context.Context, c *Context, r *repo.Repo
 		info.Source, info.Name, info.Version, info.Architecture)
 	diskPath := pool.DiskPath(cmd.Distro, filename)
 
-	dest := filepath.Join(c.Root, filepath.FromSlash(diskPath))
+	dest := filepath.Join(c.PublicDir, filepath.FromSlash(diskPath))
 	if _, statErr := os.Lstat(dest + ".bak"); statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
 			return nil
@@ -245,7 +246,7 @@ func (cmd *AddCmd) reconcileBackup(ctx context.Context, c *Context, r *repo.Repo
 		committed = match
 		break
 	}
-	if err := pool.ReconcileBackup(c.Root, diskPath, committed); err != nil {
+	if err := pool.ReconcileBackup(c.PublicDir, diskPath, committed); err != nil {
 		return fmt.Errorf("reconciling backup for %s: %w", diskPath, err)
 	}
 	return nil

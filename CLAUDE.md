@@ -30,10 +30,23 @@ automatically.
 
 Subcommand dispatch is centralized in `pkg/cli/root.go` via a single
 `jessevdk/go-flags` parser. Each subcommand is a `*Cmd` struct on `Options`
-with its flags as struct tags; `Run()` resolves the repo root, builds a shared
-`Context`, and dispatches by `parser.Active.Name`. Adding a subcommand means
-adding a field to `Options`, a case in the `switch`, and a `<name>.go` file in
-`pkg/cli/`.
+with its flags as struct tags; `Run()` resolves the state dir + public dir,
+builds a shared `Context`, and dispatches by `parser.Active.Name`. Adding a
+subcommand means adding a field to `Options`, a case in the `switch`, and a
+`<name>.go` file in `pkg/cli/`.
+
+`Context` carries the resolved environment for the dispatched subcommand:
+
+- `Context.Root` — the **state dir**: holds `repo.db` and `config.yaml`. Set
+  for every subcommand.
+- `Context.PublicDir` — the **public dir**: holds `<distro>/pool/` and
+  `<distro>/dists/`. Set only for `add`, `delete`, `publish`, `verify`
+  (`needsPublic` in `root.go`); empty for `init`, `info`, `list`, `search`.
+- `Context.Config` — parsed `config.yaml` (or an empty `*config.Config` when
+  the file is missing). Loaded and validated once in `Run()` for every command
+  except `init` (creates the file) and `info` (never reads state) — see
+  `needsConfig`. Subcommand handlers should read `c.Config` instead of
+  re-calling `loadConfig(c.Root)`.
 
 Flow of a typical write command (`add`, `delete`, `publish`):
 
@@ -41,21 +54,31 @@ Flow of a typical write command (`add`, `delete`, `publish`):
    `validateScopeName` / `requireScopeName` (defends against path traversal
    into `dists/`/`pool/` and against Release-header injection; also reserves
    `.new`/`.old` suite suffixes for publish staging).
-2. `pkg/repo` opens `repo.db` (modernc.org/sqlite, pure Go), runs any pending
-   migrations from `pkg/repo/migrate.go`, and exposes typed queries in
-   `pkg/repo/queries.go`. All multi-step writes happen inside a single
-   transaction.
+2. `pkg/repo` opens `repo.db` from `Context.Root` (modernc.org/sqlite, pure
+   Go), runs any pending migrations from `pkg/repo/migrate.go`, and exposes
+   typed queries in `pkg/repo/queries.go`. All multi-step writes happen
+   inside a single transaction.
 3. `pkg/deb` parses `.deb` control metadata; `pkg/pool` writes pool files
-   (with `pool_unix.go` / `pool_windows.go` split for atomic rename
-   semantics).
-4. `publish` rebuilds `<distro>/dists/<suite>.new/` via `pkg/index`
-   (`packages.go` for `Packages{,.gz,.xz}`, `release.go` for `Release` /
-   `InRelease` / `Release.gpg`), signs through `pkg/sign` (gpg-agent; never
-   prompts), then atomically swaps `.new` → live → `.old` and cleans up. The
-   `<suite>.new` staging dir is also cleaned on failure.
+   under `Context.PublicDir` (with `pool_unix.go` / `pool_windows.go` split
+   for atomic rename semantics).
+4. `publish` rebuilds `<publicDir>/<distro>/dists/<suite>.new/` via
+   `pkg/index` (`packages.go` for `Packages{,.gz,.xz}`, `release.go` for
+   `Release` / `InRelease` / `Release.gpg`), signs through `pkg/sign`
+   (gpg-agent; never prompts), then atomically swaps `.new` → live → `.old`
+   and cleans up. The `<suite>.new` staging dir is also cleaned on failure.
 
-Repo-root resolution: `--repo` > `$REPOKIT_ROOT` > cwd. Every command except
-`init` and `info` requires `repo.db` at the resolved root.
+State-dir resolution: `--repo` > `$REPOKIT_ROOT` > `~/.repokit/` (default).
+The cwd is **not** consulted. Every command except `init` and `info` requires
+`repo.db` at the resolved state dir.
+
+Public-dir resolution (`resolvePublicDir` in `root.go`): `--public` /
+`$REPOKIT_PUBLIC` (merged by go-flags into `opts.Public`) > `public_dir` in
+`config.yaml` (loaded once via `loadConfig` and threaded through
+`Context.Config`). The resolver rejects empty / `REPLACE_ME`, relative paths,
+non-existent or non-directory targets, control characters, and any path that
+equals or is nested with the state root in either direction (a leak would put
+`repo.db` under the webserver docroot — the whole motivation for the split).
+The public dir is never auto-created — operators must `mkdir` it themselves.
 
 Signing: `pkg/sign/gpg.go` shells out to `gpg` and relies entirely on
 `gpg-agent` for the passphrase — `repokit` never prompts. `pkg/sign/nop.go`
@@ -76,3 +99,16 @@ verify.
   because publish uses those siblings as staging dirs and would wipe them.
 - `--replace` on `add` accepts only one `.deb` per invocation (rolling back
   an overwritten pool file is unsafe inside a multi-package batch).
+- `Context.Root` and `Context.PublicDir` are not interchangeable. Pool / dists
+  I/O must read `c.PublicDir`; `repo.Open` and `loadConfig` must read
+  `c.Root`. Mixing them either leaks state into the public docroot or makes
+  the webserver miss the data. When wiring a new subcommand, mirror the
+  existing handlers and add it to `needsPublic` only if it actually touches
+  pool/dists.
+- `os.Getenv("REPOKIT_PUBLIC")` is **not** read directly — the env tag on
+  `Options.Public` lets go-flags merge it into `opts.Public`. Calling
+  `os.Getenv` again in `resolvePublicDir` would double-resolve and break the
+  precedence rule that `--public` wins over the env var.
+- The default state dir is `~/.repokit/` for **every** subcommand including
+  `init`. Tests must override `defaultStateDir` (package-level var in
+  `root.go`) rather than poke `$HOME`.

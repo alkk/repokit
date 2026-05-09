@@ -19,10 +19,15 @@ type InitCmd struct {
 }
 
 // configTemplate is the starter config.yaml written by init. It must parse
-// cleanly through config.Load (signing_key non-empty, well-formed YAML).
+// cleanly through config.Load (well-formed YAML; signing_key is enforced by
+// publish via pickSigner, not by config.Load).
 const configTemplate = `# repokit configuration
 # Replace REPLACE_ME with the gpg key id or fingerprint that signs Release.
 signing_key: "REPLACE_ME"
+
+# Absolute path to the public-facing tree (pool/ + dists/).
+# Point your webserver's docroot at this directory.
+public_dir: "REPLACE_ME"
 
 suites:
   # Per-suite Release header overrides keyed by <distro>/<suite>.
@@ -54,9 +59,14 @@ func (cmd *InitCmd) Execute(c *Context) int {
 }
 
 // resolveRoot picks the positional argument when provided, otherwise the
-// already-resolved context root.
+// already-resolved context root. ctxRoot is empty only when defaultStateDir
+// failed (e.g. no $HOME in a minimal container) — in that case the positional
+// argument is the only way to name a repo root and its absence is fatal.
 func (cmd *InitCmd) resolveRoot(ctxRoot string) (string, error) {
 	if cmd.Args.Root == "" {
+		if ctxRoot == "" {
+			return "", fmt.Errorf("no repo root resolved: pass --repo, set $%s, or supply a positional path", envRepo)
+		}
 		return ctxRoot, nil
 	}
 	abs, err := filepath.Abs(cmd.Args.Root)
@@ -87,7 +97,7 @@ func initRepo(root string) error {
 	if err := r.Close(); err != nil {
 		return fmt.Errorf("closing db: %w", err)
 	}
-	cfgPath := filepath.Join(root, "config.yaml")
+	cfgPath := filepath.Join(root, configFilename)
 	switch _, err := os.Stat(cfgPath); {
 	case err == nil:
 		return nil

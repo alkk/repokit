@@ -25,33 +25,42 @@ import (
 
 // TestIntegration_InitAddPublish exercises the full happy path: init the repo,
 // stage one fixture .deb, then publish --no-sign. Asserts that:
-//   - the pool file is in place
+//   - the pool file is in place under the public dir
 //   - dists/.../Packages contains the expected single stanza
 //   - Release references all three Packages variants
 //   - for every Packages/Packages.gz/Packages.xz file, the size and four hashes
 //     recorded in Release match the bytes on disk byte-for-byte (this is the
 //     bug-magnet case for control-stanza-newline drift)
+//   - the state dir contains exactly {config.yaml, repo.db} (no public-tree leak)
+//
+// This case exercises the --public flag path explicitly.
 func TestIntegration_InitAddPublish(t *testing.T) {
-	root := t.TempDir()
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", root, name}, args...), &stdout, &stderr, "test-rev")
+		full := append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...)
+		code := Run(full, &stdout, &stderr, "test-rev")
 		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
+	// init does not consume --public (and would not need it), but Run accepts
+	// the flag at the global level regardless, so we can keep one runCmd helper.
 	runCmd("init")
 	runCmd("add", "--distro", "debian", "--suite", "bookworm", deb)
 	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
 
-	suiteDir := filepath.Join(root, "debian", "dists", "bookworm")
+	suiteDir := filepath.Join(tmpPublic, "debian", "dists", "bookworm")
 	binDir := filepath.Join(suiteDir, "main", "binary-amd64")
 
-	poolFile := filepath.Join(root, "debian", "pool", "bookworm", "main",
+	poolFile := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main",
 		"h", "hello-gz", "hello-gz_1.0_amd64.deb")
 	assert.FileExists(t, poolFile)
+
+	assertStateDirIsPrivate(t, tmpState)
 
 	pkgPath := filepath.Join(binDir, "Packages")
 	pkgBody, err := os.ReadFile(pkgPath)
@@ -99,14 +108,18 @@ func TestIntegration_InitAddPublish(t *testing.T) {
 // concrete binary-<arch>/Packages with no binary-all/ directory created, and
 // that Architectures: in Release excludes 'all'. Then it deletes one version
 // and re-publishes to confirm scoped removal leaves siblings intact.
+//
+// This case exercises the REPOKIT_PUBLIC env-var path (no --public flag).
 func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
-	root := t.TempDir()
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
 	debDir := t.TempDir()
+	t.Setenv(envPublic, tmpPublic)
 
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", root, name}, args...), &stdout, &stderr, "test-rev")
+		code := Run(append([]string{"--repo", tmpState, name}, args...), &stdout, &stderr, "test-rev")
 		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
@@ -163,12 +176,12 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 
 	for _, distro := range distros {
 		for _, suite := range suitesByDistro[distro] {
-			assertSuiteLayout(t, root, distro, suite, components, concreteArches)
+			assertSuiteLayout(t, tmpPublic, distro, suite, components, concreteArches)
 		}
 	}
 
 	// extra version landed only in debian/bookworm/main/binary-amd64.
-	bookwormAmd64 := filepath.Join(root, "debian", "dists", "bookworm",
+	bookwormAmd64 := filepath.Join(tmpPublic, "debian", "dists", "bookworm",
 		"main", "binary-amd64", "Packages")
 	stanzas := readStanzas(t, bookwormAmd64)
 	require.Len(t, stanzas, 3, "expected 1.0/amd64 + 2.0/amd64 + 1.0/all")
@@ -177,7 +190,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 
 	// no-cross-suite-dedup: same NVRA in two suites of the same distro must
 	// produce two distinct physical pool files with identical content.
-	assertNoCrossSuiteDedup(t, root)
+	assertNoCrossSuiteDedup(t, tmpPublic)
 
 	// scoped delete + republish: drop alpha 1.0 amd64 from debian/bookworm/main
 	// only. Other versions in the same scope and other scopes must survive.
@@ -197,7 +210,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 
 	// debian/bookworm/main/binary-arm64 still has its 1.0 amd64-equivalent
 	// row (i.e., 1.0/arm64) and the 1.0/all row — delete was scoped to arch=amd64.
-	bookwormArm64 := filepath.Join(root, "debian", "dists", "bookworm",
+	bookwormArm64 := filepath.Join(tmpPublic, "debian", "dists", "bookworm",
 		"main", "binary-arm64", "Packages")
 	armStanzas := readStanzas(t, bookwormArm64)
 	require.Len(t, armStanzas, 2)
@@ -205,7 +218,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	assert.True(t, hasStanza(armStanzas, pkgName, pkgVer, "all"))
 
 	// debian/bullseye/main/binary-amd64 untouched.
-	bullseyeAmd64 := filepath.Join(root, "debian", "dists", "bullseye",
+	bullseyeAmd64 := filepath.Join(tmpPublic, "debian", "dists", "bullseye",
 		"main", "binary-amd64", "Packages")
 	bsStanzas := readStanzas(t, bullseyeAmd64)
 	require.Len(t, bsStanzas, 2)
@@ -213,32 +226,40 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	assert.True(t, hasStanza(bsStanzas, pkgName, pkgVer, "all"))
 
 	// pool file for the deleted row is gone; siblings remain.
-	deletedPool := filepath.Join(root, "debian", "pool", "bookworm", "main",
+	deletedPool := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 	_, err := os.Stat(deletedPool)
 	require.ErrorIsf(t, err, fs.ErrNotExist, "deleted pool file should be gone (got err=%v)", err)
-	survivor := filepath.Join(root, "debian", "pool", "bullseye", "main",
+	survivor := filepath.Join(tmpPublic, "debian", "pool", "bullseye", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 	assert.FileExists(t, survivor)
+
+	assertStateDirIsPrivate(t, tmpState)
 }
 
 // TestIntegration_CrossDistroSameSuite confirms that two distros publishing the
 // same suite name (e.g. debian/trixie + ubuntu/trixie) end up with two
 // independent <distro>/dists/<suite> trees, each with its own Release/Packages
 // and its own pool tree. There is no shared dists/ or pool/ namespace at the
-// repo root that would cause one distro's publish to clobber the other.
+// public root that would cause one distro's publish to clobber the other.
+//
+// This case exercises the public_dir-via-config.yaml resolution path: after
+// init, the REPLACE_ME placeholder is rewritten to tmpPublic and subsequent
+// commands run with neither --public nor REPOKIT_PUBLIC set.
 func TestIntegration_CrossDistroSameSuite(t *testing.T) {
-	root := t.TempDir()
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
 	debDir := t.TempDir()
 
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", root, name}, args...), &stdout, &stderr, "test-rev")
+		code := Run(append([]string{"--repo", tmpState, name}, args...), &stdout, &stderr, "test-rev")
 		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
 	runCmd("init")
+	rewriteConfigPublicDir(t, tmpState, tmpPublic)
 
 	debianDeb := buildTestDeb(t, debDir, "alpha", "1.0", "amd64")
 	ubuntuDeb := buildTestDeb(t, debDir, "beta", "2.0", "amd64")
@@ -247,8 +268,8 @@ func TestIntegration_CrossDistroSameSuite(t *testing.T) {
 	runCmd("add", "--distro", "ubuntu", "--suite", "trixie", ubuntuDeb)
 	runCmd("publish", "--no-sign")
 
-	debianSuite := filepath.Join(root, "debian", "dists", "trixie")
-	ubuntuSuite := filepath.Join(root, "ubuntu", "dists", "trixie")
+	debianSuite := filepath.Join(tmpPublic, "debian", "dists", "trixie")
+	ubuntuSuite := filepath.Join(tmpPublic, "ubuntu", "dists", "trixie")
 	assert.DirExists(t, debianSuite)
 	assert.DirExists(t, ubuntuSuite)
 	assert.FileExists(t, filepath.Join(debianSuite, "Release"))
@@ -268,27 +289,30 @@ func TestIntegration_CrossDistroSameSuite(t *testing.T) {
 	assert.False(t, hasStanza(ubuntuStanzas, "alpha", "1.0", "amd64"),
 		"ubuntu/trixie must not see debian/trixie packages")
 
-	assert.FileExists(t, filepath.Join(root, "debian", "pool", "trixie",
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "pool", "trixie",
 		"main", "a", "alpha", "alpha_1.0_amd64.deb"))
-	assert.FileExists(t, filepath.Join(root, "ubuntu", "pool", "trixie",
+	assert.FileExists(t, filepath.Join(tmpPublic, "ubuntu", "pool", "trixie",
 		"main", "b", "beta", "beta_2.0_amd64.deb"))
 
-	// no shared top-level dists/ or pool/ should be created — those would
-	// indicate a regression to the old layout.
-	_, err := os.Stat(filepath.Join(root, "dists"))
-	require.ErrorIsf(t, err, fs.ErrNotExist, "no shared <root>/dists/ should exist")
-	_, err = os.Stat(filepath.Join(root, "pool"))
-	require.ErrorIsf(t, err, fs.ErrNotExist, "no shared <root>/pool/ should exist")
+	// no shared top-level dists/ or pool/ should be created at the public root
+	// either — those would indicate a regression to the old shared-namespace layout.
+	_, err := os.Stat(filepath.Join(tmpPublic, "dists"))
+	require.ErrorIsf(t, err, fs.ErrNotExist, "no shared <publicDir>/dists/ should exist")
+	_, err = os.Stat(filepath.Join(tmpPublic, "pool"))
+	require.ErrorIsf(t, err, fs.ErrNotExist, "no shared <publicDir>/pool/ should exist")
+
+	assertStateDirIsPrivate(t, tmpState)
 }
 
 // assertSuiteLayout verifies the published structure for one (distro, suite):
 // concrete binary-<arch> directories exist, binary-all does not, the Packages
 // triple is present and consistent with Release, and the Release header lists
-// only concrete arches.
-func assertSuiteLayout(t *testing.T, root, distro, suite string,
+// only concrete arches. publicDir is the root of the public-facing tree that
+// holds <distro>/dists/ and <distro>/pool/.
+func assertSuiteLayout(t *testing.T, publicDir, distro, suite string,
 	components, concreteArches []string) {
 	t.Helper()
-	suiteDir := filepath.Join(root, distro, "dists", suite)
+	suiteDir := filepath.Join(publicDir, distro, "dists", suite)
 
 	for _, comp := range components {
 		_, err := os.Stat(filepath.Join(suiteDir, comp, "binary-all"))
@@ -354,11 +378,11 @@ func assertSuiteLayout(t *testing.T, root, distro, suite string,
 // assertNoCrossSuiteDedup confirms that the same NVRA staged into two suites
 // of the same distro lands at distinct physical pool paths with byte-identical
 // content but separate inodes — repokit never aliases pool files across suites.
-func assertNoCrossSuiteDedup(t *testing.T, root string) {
+func assertNoCrossSuiteDedup(t *testing.T, publicDir string) {
 	t.Helper()
-	bookworm := filepath.Join(root, "debian", "pool", "bookworm", "main",
+	bookworm := filepath.Join(publicDir, "debian", "pool", "bookworm", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
-	bullseye := filepath.Join(root, "debian", "pool", "bullseye", "main",
+	bullseye := filepath.Join(publicDir, "debian", "pool", "bullseye", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 
 	require.NotEqual(t, bookworm, bullseye, "pool paths must differ across suites")
@@ -376,6 +400,46 @@ func assertNoCrossSuiteDedup(t *testing.T, root string) {
 	require.NoError(t, err)
 	assert.Equal(t, body1, body2,
 		"pool file content must be identical across suites (same source .deb)")
+}
+
+// assertStateDirIsPrivate confirms that no public-tree files leaked into the
+// state dir: only config.yaml and repo.db (plus its sqlite -journal/-wal/-shm
+// siblings, if any) are allowed at the top level. A leaked <distro>/ directory
+// would mean some command still treats the state dir as the public root.
+func assertStateDirIsPrivate(t *testing.T, stateDir string) {
+	t.Helper()
+	entries, err := os.ReadDir(stateDir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		name := e.Name()
+		switch name {
+		case configFilename, dbFilename:
+			continue
+		}
+		// sqlite may leave behind ephemeral siblings of repo.db (rare for our
+		// closed-handle workflow, but cheap to tolerate).
+		if strings.HasPrefix(name, dbFilename+"-") {
+			continue
+		}
+		t.Fatalf("state dir leaked unexpected entry %q (isDir=%v); only config.yaml + repo.db allowed",
+			name, e.IsDir())
+	}
+}
+
+// rewriteConfigPublicDir replaces the REPLACE_ME placeholder in the freshly-
+// init'd <stateDir>/config.yaml with publicDir, so subsequent commands resolve
+// public_dir through the config path with neither --public nor REPOKIT_PUBLIC set.
+func rewriteConfigPublicDir(t *testing.T, stateDir, publicDir string) {
+	t.Helper()
+	cfgPath := filepath.Join(stateDir, configFilename)
+	body, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	updated := strings.Replace(string(body),
+		`public_dir: "REPLACE_ME"`,
+		`public_dir: "`+publicDir+`"`,
+		1)
+	require.NotEqual(t, string(body), updated, "config template must contain a public_dir REPLACE_ME line")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(updated), 0o644))
 }
 
 // releaseEntry captures one " <hash> <size> <path>" line.

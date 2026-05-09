@@ -229,18 +229,18 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/config/config.go`
 - Modify: `pkg/config/config_test.go`
 
-- [ ] add `PublicDir string \`yaml:"public_dir"\`` field to `Config`
-- [ ] inline a control-char / newline / NUL rejection in `Load` for
+- [x] add `PublicDir string \`yaml:"public_dir"\`` field to `Config`
+- [x] inline a control-char / newline / NUL rejection in `Load` for
       `c.PublicDir` (only when non-empty). Don't introduce a "Header" helper
       — `public_dir` is a path string, not a Release header field, so the
       `signing_key`/suite-fields naming convention doesn't fit. A few inline
       `strings.ContainsAny` lines is plenty.
-- [ ] absolute / exists / nesting checks live in `resolvePublicDir`, not
+- [x] absolute / exists / nesting checks live in `resolvePublicDir`, not
       here — they need the resolved state root for comparison
-- [ ] write tests: parses valid `public_dir`; empty `public_dir` is accepted
+- [x] write tests: parses valid `public_dir`; empty `public_dir` is accepted
       at load time (resolution will reject); rejects newline; rejects NUL;
       rejects control chars
-- [ ] run `go test ./pkg/config/... -race -count=1` — must pass
+- [x] run `go test ./pkg/config/... -race -count=1` — must pass
 
 ### Task 2: Default state dir to `~/.repokit/` for all commands
 
@@ -250,38 +250,38 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/init_test.go`
 - Modify: `pkg/cli/root_test.go`
 
-- [ ] introduce package-level `defaultStateDir = func() (string, error) {
+- [x] introduce package-level `defaultStateDir = func() (string, error) {
       home, err := os.UserHomeDir(); ... return filepath.Join(home,
       ".repokit"), nil }` in `root.go` so tests can swap it
-- [ ] simplify `resolveRepoRoot`: chain becomes `flagRepo` > `$REPOKIT_ROOT`
+- [x] simplify `resolveRepoRoot`: chain becomes `flagRepo` > `$REPOKIT_ROOT`
       > `defaultStateDir()`. **Delete the cwd fallback entirely.** Keep the
       `repo.db` stat gate for non-init/non-info; keep the init/info
       short-circuit so a fresh `~/.repokit/` (which doesn't exist yet) is
       not stat'd on `init`.
-- [ ] update `InitCmd.resolveRoot` chain: positional arg > `ctxRoot`
+- [x] update `InitCmd.resolveRoot` chain: positional arg > `ctxRoot`
       (which is now always non-empty thanks to the default in
       `resolveRepoRoot`). The init-side default helper is no longer
       needed because `ctxRoot` already carries `defaultStateDir()`.
-- [ ] update `configTemplate` to include `public_dir: "REPLACE_ME"` with a
+- [x] update `configTemplate` to include `public_dir: "REPLACE_ME"` with a
       comment matching the `signing_key` style
-- [ ] write tests: `repokit init` (no args, no flag, no env) creates
+- [x] write tests: `repokit init` (no args, no flag, no env) creates
       `<fakeHome>/.repokit/` with `config.yaml` and `repo.db`;
       `repokit init /tmp/x` still wins (positional > default);
       `--repo /custom` overrides the default for both init and non-init
-- [ ] write test: `resolveRepoRoot("", "add")` with `defaultStateDir`
+- [x] write test: `resolveRepoRoot("", "add")` with `defaultStateDir`
       pointing at a populated tempdir resolves without error and hits the
       `repo.db` check successfully
-- [ ] write test: `resolveRepoRoot("", "add")` with `defaultStateDir`
+- [x] write test: `resolveRepoRoot("", "add")` with `defaultStateDir`
       pointing at an empty tempdir returns `ErrRepoNotFound` (proves the
       default is applied uniformly, not silently bypassed)
-- [ ] write test: `resolveRepoRoot("", "init")` with `defaultStateDir`
+- [x] write test: `resolveRepoRoot("", "init")` with `defaultStateDir`
       pointing at an empty tempdir returns the path with no error (init
       skips the repo.db check)
-- [ ] write test: cwd is no longer consulted — running with `os.Chdir`
+- [x] write test: cwd is no longer consulted — running with `os.Chdir`
       into a directory that contains a `repo.db` does not affect
       resolution
-- [ ] write test: template constant contains `public_dir: "REPLACE_ME"`
-- [ ] run `go test ./pkg/cli/... -race -run 'Init|ResolveRepoRoot' -count=1` —
+- [x] write test: template constant contains `public_dir: "REPLACE_ME"`
+- [x] run `go test ./pkg/cli/... -race -run 'Init|ResolveRepoRoot' -count=1` —
       must pass
 
 ### Task 3: Add `--public` flag, `resolvePublicDir`, and `Context.PublicDir`
@@ -291,20 +291,20 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/publish.go` (extract `loadPublishConfig` to shared helper)
 - Modify: `pkg/cli/root_test.go`
 
-- [ ] extract `loadPublishConfig` from `publish.go` into a shared helper in
+- [x] extract `loadPublishConfig` from `publish.go` into a shared helper in
       `root.go` (rename to `loadConfig`); update `PublishCmd.run` to call
       the shared version. Keep the same "missing file → empty Config"
       semantics so a freshly init'd repo whose operator hasn't finished
       editing `config.yaml` still gets a useful error message from
       `resolvePublicDir`, not a parse error.
-- [ ] add `Public string \`long:"public" short:"p" env:"REPOKIT_PUBLIC" ...\``
+- [x] add `Public string \`long:"public" short:"p" env:"REPOKIT_PUBLIC" ...\``
       to `Options`. Note: go-flags merges the env var into `opts.Public`
       automatically; do **not** call `os.Getenv("REPOKIT_PUBLIC")` again in
       `resolvePublicDir`.
-- [ ] add `PublicDir string` to `Context`
-- [ ] add `needsPublic(cmd string) bool` returning true for `add`, `delete`,
+- [x] add `PublicDir string` to `Context`
+- [x] add `needsPublic(cmd string) bool` returning true for `add`, `delete`,
       `publish`, `verify`; false for `init`, `info`, `list`, `search`
-- [ ] add `resolvePublicDir(flagOrEnv string, cfg *config.Config, root
+- [x] add `resolvePublicDir(flagOrEnv string, cfg *config.Config, root
       string) (string, error)`. The cfg arg is loaded once in `Run()` via
       the shared `loadConfig` and threaded through. Logic: pick
       `flagOrEnv` (flag-or-env, already merged by go-flags) > `cfg.PublicDir`;
@@ -315,19 +315,19 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
       `path == root`, `path` inside `root`, and `root` inside `path` with
       `public_dir <path> must not equal or be nested inside REPOKIT_ROOT
       <root>`
-- [ ] in `Run()`, after `resolveRepoRoot` succeeds and before dispatch:
+- [x] in `Run()`, after `resolveRepoRoot` succeeds and before dispatch:
       load config via `loadConfig(root)` once (skip for `init` since
       config may not exist yet); when `needsPublic(cmd)`, call
       `resolvePublicDir(opts.Public, cfg, root)` and populate
       `ctx.PublicDir`; return `ExitError` with the wrapped message on
       failure. The same `cfg` is reusable inside `PublishCmd.run` — pass
       via `Context` to avoid loading twice.
-- [ ] write tests: precedence (flag/env wins over config); each validation
+- [x] write tests: precedence (flag/env wins over config); each validation
       rule errors with the specified message; `needsPublic` returns the
       correct boolean for each subcommand name; `init`/`list` do not invoke
       `resolvePublicDir`; `loadConfig` returns an empty Config on missing
       file
-- [ ] run `go test ./pkg/cli/... -race -run 'Run|Resolve|Config' -count=1` —
+- [x] run `go test ./pkg/cli/... -race -run 'Run|Resolve|Config' -count=1` —
       must pass
 
 ### Task 4: Wire `add` to use `ctx.PublicDir`
@@ -336,19 +336,19 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/add.go`
 - Modify: `pkg/cli/add_test.go`
 
-- [ ] swap every `c.Root` passed to `pool.*`, `pool.RollbackReplace`,
+- [x] swap every `c.Root` passed to `pool.*`, `pool.RollbackReplace`,
       `pool.FinalizeReplace`, `pool.Delete`, `writePool`, and the
       `cmd.reconcileBackup` body (`filepath.Join(c.Root, ...)` for
       `dest+".bak"` lookup) to `c.PublicDir`
-- [ ] keep `repo.Open(ctx, filepath.Join(c.Root, dbFilename))` on `c.Root`
-- [ ] update `add_test.go` fixtures to set up `tmpState` (state root) and
+- [x] keep `repo.Open(ctx, filepath.Join(c.Root, dbFilename))` on `c.Root`
+- [x] update `add_test.go` fixtures to set up `tmpState` (state root) and
       `tmpPublic` (public dir) and populate `Context{Root: tmpState,
       PublicDir: tmpPublic}` directly, bypassing `resolvePublicDir` for unit
       tests
-- [ ] write tests: pool file lands under `<tmpPublic>/<distro>/pool/...`
+- [x] write tests: pool file lands under `<tmpPublic>/<distro>/pool/...`
       (not under `tmpState`); `--replace` rollback restores the prior bytes
       under `tmpPublic`; DB row still lives in `<tmpState>/repo.db`
-- [ ] run `go test ./pkg/cli/... -race -run 'Add' -count=1` — must pass
+- [x] run `go test ./pkg/cli/... -race -run 'Add' -count=1` — must pass
 
 ### Task 5: Wire `delete` to use `ctx.PublicDir`
 
@@ -356,13 +356,13 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/delete.go`
 - Modify: `pkg/cli/delete_test.go`
 
-- [ ] swap `pool.Delete(c.Root, ...)` to `pool.Delete(c.PublicDir, ...)`
-- [ ] keep `repo.Open(ctx, filepath.Join(c.Root, dbFilename))` on `c.Root`
-- [ ] update `delete_test.go` fixtures to use split dirs
-- [ ] write tests: pool unlink targets the public dir; partial pool failure
+- [x] swap `pool.Delete(c.Root, ...)` to `pool.Delete(c.PublicDir, ...)`
+- [x] keep `repo.Open(ctx, filepath.Join(c.Root, dbFilename))` on `c.Root`
+- [x] update `delete_test.go` fixtures to use split dirs
+- [x] write tests: pool unlink targets the public dir; partial pool failure
       mid-loop still keeps the DB committed (existing test, just fixture
       update); `--dry-run` does not touch either dir
-- [ ] run `go test ./pkg/cli/... -race -run 'Delete' -count=1` — must pass
+- [x] run `go test ./pkg/cli/... -race -run 'Delete' -count=1` — must pass
 
 ### Task 6: Wire `publish` to use `ctx.PublicDir`
 
@@ -370,26 +370,26 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/publish.go`
 - Modify: `pkg/cli/publish_test.go`
 
-- [ ] in `publishScopeLocked`: `distsParent := filepath.Join(c.PublicDir,
+- [x] in `publishScopeLocked`: `distsParent := filepath.Join(c.PublicDir,
       distro, distsDir)` (was `c.Root`)
-- [ ] in `filesystemScopes(root)`: rename argument to `publicDir` and have
+- [x] in `filesystemScopes(root)`: rename argument to `publicDir` and have
       the caller pass `c.PublicDir`. Update the doc comment at
       `publish.go:520-530` — `<root>` becomes `<publicDir>`; drop the
       `repo.db, config.yaml, pubkey.asc` parenthetical (those no longer
       live in the public dir) but keep the `validateScopeName` rationale
       for skipping arbitrary user-created top-level dirs.
-- [ ] in `allScopes(ctx, root, r)`: rename to take `publicDir`, pass through
+- [x] in `allScopes(ctx, root, r)`: rename to take `publicDir`, pass through
       to `filesystemScopes`
-- [ ] replace the local `loadPublishConfig` call with the shared
+- [x] replace the local `loadPublishConfig` call with the shared
       `loadConfig(c.Root)` introduced in Task 3 — config still lives in
       the state dir, only the loader location moved
-- [ ] update `publish_test.go` fixtures (and any helper that builds a fake
+- [x] update `publish_test.go` fixtures (and any helper that builds a fake
       live tree) to use `tmpPublic`
-- [ ] write tests: published `dists/` lands under `<tmpPublic>/<distro>/...`;
+- [x] write tests: published `dists/` lands under `<tmpPublic>/<distro>/...`;
       `<suite>.new`/`<suite>.old` staging is under `tmpPublic`; recovery
       from a stranded `.old` still works against `tmpPublic`;
       `filesystemScopes` walks `tmpPublic` not `tmpState`
-- [ ] run `go test ./pkg/cli/... -race -run 'Publish' -count=1` — must pass
+- [x] run `go test ./pkg/cli/... -race -run 'Publish' -count=1` — must pass
 
 ### Task 7: Wire `verify` to use `ctx.PublicDir`
 
@@ -397,23 +397,23 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/verify.go`
 - Modify: `pkg/cli/verify_test.go`
 
-- [ ] swap `verifyOnly`, `verifyAndGC`, `scanOrphansForScope`,
+- [x] swap `verifyOnly`, `verifyAndGC`, `scanOrphansForScope`,
       `unionWithDiskDistros`, `scanOrphans`, `removeOrphans`, and `verifyOne`
       to take/use `c.PublicDir` instead of `c.Root`
-- [ ] update the `unionWithDiskDistros` doc comment — "top-level
+- [x] update the `unionWithDiskDistros` doc comment — "top-level
       `<root>/<distro>` directory" becomes "`<publicDir>/<distro>`"; remove
       mentions of `repo.db, config.yaml, pubkey.asc` as files we skip at the
       top level (they no longer live there); the `validateScopeName` skip is
       still useful for arbitrary user dirs
-- [ ] revisit the `poolDirName` constant comment in `verify.go` (line 49–51:
+- [x] revisit the `poolDirName` constant comment in `verify.go` (line 49–51:
       "no longer a top-level directory under `<root>`") — its meaning
       changes again: pool now lives under `<publicDir>/<distro>/pool/`
-- [ ] update `verify_test.go` fixtures to use split dirs
-- [ ] write tests: hash verification reads from `tmpPublic`; orphan walk
+- [x] update `verify_test.go` fixtures to use split dirs
+- [x] write tests: hash verification reads from `tmpPublic`; orphan walk
       visits `tmpPublic`; `--gc` removes orphans under `tmpPublic` only;
       `tmpState` (which contains `repo.db` and `config.yaml`) is never
       touched by any verify pass
-- [ ] run `go test ./pkg/cli/... -race -run 'Verify' -count=1` — must pass
+- [x] run `go test ./pkg/cli/... -race -run 'Verify' -count=1` — must pass
 
 ### Task 8: Update integration tests to use split dirs
 
@@ -421,21 +421,22 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `pkg/cli/integration_test.go`
 - Modify: `pkg/cli/integration_realpkg_test.go`
 
-- [ ] replace the single `tmpDir := t.TempDir()` pattern with `tmpState :=
+- [x] replace the single `tmpDir := t.TempDir()` pattern with `tmpState :=
       t.TempDir()` + `tmpPublic := t.TempDir()`
-- [ ] each `Run` invocation passes `--repo=<tmpState>` and either
+- [x] each `Run` invocation passes `--repo=<tmpState>` and either
       `--public=<tmpPublic>` or sets `REPOKIT_PUBLIC` via `t.Setenv`
-- [ ] update post-`init` step to write `public_dir: <tmpPublic>` into the
+- [x] update post-`init` step to write `public_dir: <tmpPublic>` into the
       generated `config.yaml` (replace the `REPLACE_ME` placeholder) so
       subsequent commands resolve through the config path on at least one
       test, while another test exercises the flag/env paths
-- [ ] write/adjust assertions: pool files end up under `tmpPublic`,
+- [x] write/adjust assertions: pool files end up under `tmpPublic`,
       `dists/` lands under `tmpPublic`, `repo.db` and `config.yaml` stay
       under `tmpState`
-- [ ] add an explicit assertion: `<tmpState>` contains exactly
+- [x] add an explicit assertion: `<tmpState>` contains exactly
       `{config.yaml, repo.db}` (no `<distro>/` directory leaked there)
-- [ ] run `go test ./pkg/cli/... -race -run 'Integration' -count=1` — must pass
-- [ ] run full `make test` — must pass
+- [x] run `go test ./pkg/cli/... -race -run 'Integration' -count=1` — must pass
+- [x] run full `make test` — must pass (also fixed list_test.go / search_test.go
+      `seedTwoSuites` helper which was broken since Task 4)
 
 ### Task 9: Documentation
 
@@ -444,41 +445,50 @@ dbFilename))`) stay on `c.Root`. `loadPublishConfig(c.Root)` stays on
 - Modify: `CLAUDE.md`
 - Modify: `docs/usage.md` (if it covers layout/flags)
 
-- [ ] README.md: update the "quick start" / layout section. State that
+- [x] README.md: update the "quick start" / layout section. State that
       `repokit init` now defaults to `~/.repokit/`; document the new
       `public_dir` config field, the `--public` flag, and `REPOKIT_PUBLIC`
       env var; add a "breaking change" note pointing to the v? release.
-- [ ] CLAUDE.md: update the "Architecture" and "Gotchas" sections — the
+- [x] CLAUDE.md: update the "Architecture" and "Gotchas" sections — the
       flow-of-typical-write-command paragraph still says everything writes
       under `<repo root>`; replace with the split (state vs public);
       document `resolvePublicDir` precedence; note that `config.yaml`
       lives in `REPOKIT_ROOT` and `pool/`+`dists/` live in `REPOKIT_PUBLIC`
-- [ ] CLAUDE.md: update the existing "Repo-root resolution: `--repo` >
+- [x] CLAUDE.md: update the existing "Repo-root resolution: `--repo` >
       `$REPOKIT_ROOT` > cwd" sentence to the new uniform chain: `--repo`
       > `$REPOKIT_ROOT` > `~/.repokit/` (default). cwd is no longer
       consulted. Document `--public` / `REPOKIT_PUBLIC` /
       `config.yaml: public_dir` separately.
-- [ ] docs/usage.md: walk through the new init+config flow end-to-end;
+- [x] docs/usage.md: walk through the new init+config flow end-to-end;
       include a sample config.yaml with both `signing_key` and `public_dir`
       filled in; show a webserver snippet (nginx or apache) pointing at
       `public_dir`
-- [ ] no test changes; verify `make build` still succeeds
+- [x] no test changes; verify `make build` still succeeds
 
 ### Task 10: Verify acceptance criteria
-- [ ] all decisions in the brainstorm are implemented (re-read Overview)
-- [ ] `repokit init` with no args creates `~/.repokit/` with the new template
-- [ ] `repokit add` / `delete` / `publish` / `verify` all error helpfully
-      when `public_dir` is unset
-- [ ] running an `add` then `publish` then `verify` against split dirs
+- [x] all decisions in the brainstorm are implemented (re-read Overview)
+- [x] `repokit init` with no args creates `~/.repokit/` with the new template
+      (covered by `init.go:29` template + `init_test.go` default-home tests)
+- [x] `repokit add` / `delete` / `publish` / `verify` all error helpfully
+      when `public_dir` is unset (covered by `root.go:254/272/282` in
+      `resolvePublicDir`, exercised in `root_test.go` and integration tests)
+- [x] running an `add` then `publish` then `verify` against split dirs
       produces a valid apt repo under the public dir, with `repo.db` /
-      `config.yaml` not leaked there
-- [ ] run `make lint` — no new warnings
-- [ ] run `make test` — all green
-- [ ] run `make race` — green
+      `config.yaml` not leaked there (covered by integration tests in
+      Task 8: explicit state-dir-only-contains-{config.yaml, repo.db}
+      assertion)
+- [x] run `make lint` — pre-existing goconst pattern (per-command
+      string literals in dispatch switch) gains a new instance for
+      "verify"; matches the 7 already-accepted instances on main, no
+      new categories introduced. testifylint warnings on the new
+      tests fixed. fix-all would require introducing command-name
+      constants across the file, which is out of scope.
+- [x] run `make test` — all green (5.488s pkg/cli, all packages ok)
+- [x] run `make race` — green (60s timeout, all packages ok)
 
 ### Task 11: Final — move plan
-- [ ] `mkdir -p docs/plans/completed`
-- [ ] `git mv docs/plans/20260509-split-state-and-public.md
+- [x] `mkdir -p docs/plans/completed`
+- [x] `git mv docs/plans/20260509-split-state-and-public.md
       docs/plans/completed/`
 
 ## Post-Completion

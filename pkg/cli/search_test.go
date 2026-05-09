@@ -12,8 +12,9 @@ import (
 
 func TestSearchMatchByName(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--repo", root, "search", "hello-gz"}, &stdout, &stderr, "test-rev")
@@ -26,8 +27,9 @@ func TestSearchMatchByName(t *testing.T) {
 
 func TestSearchMatchByControlDescription(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	// "fixture" appears only in the Description field of every fixture, so a
 	// match on this term proves the LIKE scan reaches the control column too.
@@ -42,8 +44,9 @@ func TestSearchMatchByControlDescription(t *testing.T) {
 
 func TestSearchFilteredBySuite(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
@@ -58,8 +61,9 @@ func TestSearchFilteredBySuite(t *testing.T) {
 
 func TestSearchNoMatchesIsSilent(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--repo", root, "search", "no-such-package"}, &stdout, &stderr, "test-rev")
@@ -69,8 +73,9 @@ func TestSearchNoMatchesIsSilent(t *testing.T) {
 
 func TestSearchJSONFormat(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
@@ -89,8 +94,9 @@ func TestSearchJSONFormat(t *testing.T) {
 
 func TestSearchJSONNoMatchesProducesNoOutput(t *testing.T) {
 	root := t.TempDir()
+	public := t.TempDir()
 	initRepoForTest(t, root)
-	seedTwoSuites(t, root)
+	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{

@@ -46,8 +46,9 @@ func (cmd *VerifyCmd) Execute(c *Context) int {
 }
 
 // poolDirName is the literal "pool" segment that sits under each per-distro
-// disk root (i.e. <root>/<distro>/pool/...). It is no longer a top-level
-// directory under <root>.
+// public-tree root (i.e. <publicDir>/<distro>/pool/...). It is not a
+// top-level directory under <publicDir> either — every pool file lives
+// under a per-distro subdirectory.
 const poolDirName = "pool"
 
 // verifyReport accumulates issues found by a single verify run. Paths use
@@ -103,12 +104,12 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 		// serializes verify --gc against any other writer (add/delete) on
 		// this repo.
 		err = r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
-			return cmd.verifyAndGC(ctx, c.Root, r, conn, report)
+			return cmd.verifyAndGC(ctx, c.PublicDir, r, conn, report)
 		})
 		if err != nil {
 			return nil, fmt.Errorf("gc pass: %w", err)
 		}
-	} else if err := cmd.verifyOnly(ctx, c.Root, r, report); err != nil {
+	} else if err := cmd.verifyOnly(ctx, c.PublicDir, r, report); err != nil {
 		return nil, err
 	}
 
@@ -120,16 +121,16 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 // orphans. Concurrent writers may add or delete rows during the walk;
 // without a lock the report is best-effort, which is acceptable when no
 // destructive action follows.
-func (cmd *VerifyCmd) verifyOnly(ctx context.Context, root string, r *repo.Repo, report *verifyReport) error {
+func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, r *repo.Repo, report *verifyReport) error {
 	rows, err := r.List(ctx, repo.Filter{Distro: cmd.Distro, Suite: cmd.Suite})
 	if err != nil {
 		return fmt.Errorf("listing rows: %w", err)
 	}
-	known, err := hashAndIndex(root, rows, report)
+	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
 	}
-	return cmd.scanOrphansForScope(ctx, root, r.EnumerateDistros, known, report)
+	return cmd.scanOrphansForScope(ctx, publicDir, r.EnumerateDistros, known, report)
 }
 
 // verifyAndGC runs the same checks as verifyOnly but reads rows through
@@ -137,23 +138,23 @@ func (cmd *VerifyCmd) verifyOnly(ctx context.Context, root string, r *repo.Repo,
 // snapshot no concurrent writer can mutate, then deletes the orphans
 // before releasing the lock.
 func (cmd *VerifyCmd) verifyAndGC(
-	ctx context.Context, root string, r *repo.Repo, conn *sql.Conn, report *verifyReport,
+	ctx context.Context, publicDir string, r *repo.Repo, conn *sql.Conn, report *verifyReport,
 ) error {
 	rows, err := r.ListConn(ctx, conn, repo.Filter{Distro: cmd.Distro, Suite: cmd.Suite})
 	if err != nil {
 		return fmt.Errorf("listing rows: %w", err)
 	}
-	known, err := hashAndIndex(root, rows, report)
+	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
 	}
 	enumerate := func(ctx context.Context) ([]string, error) {
 		return r.EnumerateDistrosConn(ctx, conn)
 	}
-	if err := cmd.scanOrphansForScope(ctx, root, enumerate, known, report); err != nil {
+	if err := cmd.scanOrphansForScope(ctx, publicDir, enumerate, known, report); err != nil {
 		return err
 	}
-	return removeOrphans(root, report.Orphans)
+	return removeOrphans(publicDir, report.Orphans)
 }
 
 // scanOrphansForScope dispatches the orphan walk for both the scoped
@@ -162,50 +163,49 @@ func (cmd *VerifyCmd) verifyAndGC(
 // (e.g. all rows deleted but pool files left behind) is still walked.
 func (cmd *VerifyCmd) scanOrphansForScope(
 	ctx context.Context,
-	root string,
+	publicDir string,
 	enumerate func(context.Context) ([]string, error),
 	known map[string]struct{},
 	report *verifyReport,
 ) error {
 	if cmd.Distro != "" {
-		return scanOrphans(root, cmd.Distro, cmd.Suite, known, report)
+		return scanOrphans(publicDir, cmd.Distro, cmd.Suite, known, report)
 	}
 	dbDistros, err := enumerate(ctx)
 	if err != nil {
 		return fmt.Errorf("enumerating distros: %w", err)
 	}
-	distros, err := unionWithDiskDistros(root, dbDistros)
+	distros, err := unionWithDiskDistros(publicDir, dbDistros)
 	if err != nil {
 		return err
 	}
-	return scanOrphansAcrossDistros(root, distros, known, report)
+	return scanOrphansAcrossDistros(publicDir, distros, known, report)
 }
 
 // hashAndIndex rehashes every row and returns a set of disk-relative paths
 // (<distro>/pool/...) that the orphan walk can diff against. Walks the rows
 // once so verifyOne and known share the same iteration.
-func hashAndIndex(root string, rows []repo.Package, report *verifyReport) (map[string]struct{}, error) {
+func hashAndIndex(publicDir string, rows []repo.Package, report *verifyReport) (map[string]struct{}, error) {
 	known := make(map[string]struct{}, len(rows))
 	for _, p := range rows {
 		known[pool.DiskPath(p.Distro, p.Filename)] = struct{}{}
-		if err := verifyOne(root, p, report); err != nil {
+		if err := verifyOne(publicDir, p, report); err != nil {
 			return nil, err
 		}
 	}
 	return known, nil
 }
 
-// unionWithDiskDistros merges dbDistros with any top-level <root>/<distro>
+// unionWithDiskDistros merges dbDistros with any <publicDir>/<distro>
 // directory that contains a pool/ subtree. Without the disk side of the
 // union, an unscoped verify would miss orphans in distros that have no DB
 // rows at all — e.g. a crashed add or a delete pass that removed the last
 // row but left the pool file behind. Entries whose name does not pass
-// validateScopeName("distro", ...) are skipped on both sides so stray
-// top-level files (repo.db, config.yaml, pubkey.asc) and arbitrary
-// user-created dirs do not trigger spurious orphan walks, and a
+// validateScopeName("distro", ...) are skipped on both sides so arbitrary
+// user-created top-level dirs do not trigger spurious orphan walks, and a
 // tampered/corrupted DB row carrying ".." or a path separator cannot
-// steer the walk outside the repo root (mirrors dbScopes in publish.go).
-func unionWithDiskDistros(root string, dbDistros []string) ([]string, error) {
+// steer the walk outside the public dir (mirrors dbScopes in publish.go).
+func unionWithDiskDistros(publicDir string, dbDistros []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(dbDistros))
 	out := make([]string, 0, len(dbDistros))
 	for _, d := range dbDistros {
@@ -218,13 +218,13 @@ func unionWithDiskDistros(root string, dbDistros []string) ([]string, error) {
 		seen[d] = struct{}{}
 		out = append(out, d)
 	}
-	entries, err := os.ReadDir(root)
+	entries, err := os.ReadDir(publicDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			sort.Strings(out)
 			return out, nil
 		}
-		return nil, fmt.Errorf("reading %s: %w", root, err)
+		return nil, fmt.Errorf("reading %s: %w", publicDir, err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -237,7 +237,7 @@ func unionWithDiskDistros(root string, dbDistros []string) ([]string, error) {
 		if err := validateScopeName("distro", name); err != nil {
 			continue
 		}
-		poolPath := filepath.Join(root, name, poolDirName)
+		poolPath := filepath.Join(publicDir, name, poolDirName)
 		info, err := os.Stat(poolPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -255,12 +255,12 @@ func unionWithDiskDistros(root string, dbDistros []string) ([]string, error) {
 	return out, nil
 }
 
-// scanOrphansAcrossDistros walks <root>/<distro>/pool for every distro and
-// records orphans into report. Used when verify runs unscoped — the union of
-// all per-distro pools is the search space.
-func scanOrphansAcrossDistros(root string, distros []string, known map[string]struct{}, report *verifyReport) error {
+// scanOrphansAcrossDistros walks <publicDir>/<distro>/pool for every distro
+// and records orphans into report. Used when verify runs unscoped — the union
+// of all per-distro pools is the search space.
+func scanOrphansAcrossDistros(publicDir string, distros []string, known map[string]struct{}, report *verifyReport) error {
 	for _, d := range distros {
-		if err := scanOrphans(root, d, "", known, report); err != nil {
+		if err := scanOrphans(publicDir, d, "", known, report); err != nil {
 			return err
 		}
 	}
@@ -270,8 +270,8 @@ func scanOrphansAcrossDistros(root string, distros []string, known map[string]st
 // verifyOne rehashes a single pool file and records mismatches or missing
 // files against report. A missing file is not a hard error — the absence is a
 // reportable finding for the caller to decide on.
-func verifyOne(root string, p repo.Package, report *verifyReport) error {
-	abs, err := pool.SafeJoin(root, pool.DiskPath(p.Distro, p.Filename))
+func verifyOne(publicDir string, p repo.Package, report *verifyReport) error {
+	abs, err := pool.SafeJoin(publicDir, pool.DiskPath(p.Distro, p.Filename))
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", p.Filename, err)
 	}
@@ -310,9 +310,9 @@ func hashEq(h hash.Hash, want string) bool {
 // The walk is a no-op when the scoped directory does not exist (e.g. a distro
 // with no published files yet). distro must be non-empty; the unscoped case
 // is handled by the caller iterating over distros.
-func scanOrphans(root, distro, suite string, known map[string]struct{}, report *verifyReport) error {
+func scanOrphans(publicDir, distro, suite string, known map[string]struct{}, report *verifyReport) error {
 	rel := scopePoolDir(distro, suite)
-	abs := filepath.Join(root, filepath.FromSlash(rel))
+	abs := filepath.Join(publicDir, filepath.FromSlash(rel))
 	if _, err := os.Stat(abs); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -334,7 +334,7 @@ func scanOrphans(root, distro, suite string, known map[string]struct{}, report *
 		if strings.HasSuffix(d.Name(), ".tmp") || strings.HasSuffix(d.Name(), ".bak") {
 			return nil
 		}
-		relPath, rerr := filepath.Rel(root, p)
+		relPath, rerr := filepath.Rel(publicDir, p)
 		if rerr != nil {
 			return rerr //nolint:wrapcheck // surfaced verbatim by the outer wrap
 		}
@@ -364,9 +364,9 @@ func scopePoolDir(distro, suite string) string {
 
 // removeOrphans deletes the listed pool files. pool.Delete is idempotent so a
 // second call would be a no-op; we still surface real I/O errors.
-func removeOrphans(root string, orphans []string) error {
+func removeOrphans(publicDir string, orphans []string) error {
 	for _, p := range orphans {
-		if err := pool.Delete(root, p); err != nil {
+		if err := pool.Delete(publicDir, p); err != nil {
 			return fmt.Errorf("removing orphan %s: %w", p, err)
 		}
 	}

@@ -60,11 +60,7 @@ func (cmd *PublishCmd) run(c *Context) error {
 	}
 
 	ctx := context.Background()
-
-	cfg, err := loadPublishConfig(c.Root)
-	if err != nil {
-		return err
-	}
+	cfg := c.Config
 
 	r, err := repo.Open(ctx, filepath.Join(c.Root, dbFilename))
 	if err != nil {
@@ -72,7 +68,7 @@ func (cmd *PublishCmd) run(c *Context) error {
 	}
 	defer r.Close()
 
-	scopes, err := cmd.resolveScopes(ctx, c.Root, r)
+	scopes, err := cmd.resolveScopes(ctx, c.PublicDir, r)
 	if err != nil {
 		return err
 	}
@@ -89,7 +85,7 @@ func (cmd *PublishCmd) run(c *Context) error {
 	}
 
 	for _, sc := range scopes {
-		if err := publishScope(ctx, c.Root, r, cfg, signer, sc.distro, sc.suite); err != nil {
+		if err := publishScope(ctx, c.PublicDir, r, cfg, signer, sc.distro, sc.suite); err != nil {
 			return fmt.Errorf("publishing %s/%s: %w", sc.distro, sc.suite, err)
 		}
 	}
@@ -107,45 +103,30 @@ func (cmd *PublishCmd) run(c *Context) error {
 // targets to rebuild. Both empty fans out to every suite present in the DB
 // or as an existing dists/ tree on disk; a single side specified without the
 // other is rejected.
-func (cmd *PublishCmd) resolveScopes(ctx context.Context, root string, r *repo.Repo) ([]scope, error) {
+func (cmd *PublishCmd) resolveScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, error) {
 	if cmd.Distro != "" && cmd.Suite != "" {
 		return []scope{{distro: cmd.Distro, suite: cmd.Suite}}, nil
 	}
 	if cmd.Distro != "" || cmd.Suite != "" {
 		return nil, errors.New("--distro and --suite must be provided together (or both omitted to publish all)")
 	}
-	return allScopes(ctx, root, r)
+	return allScopes(ctx, publicDir, r)
 }
 
 // pickSigner selects the signing backend. --no-sign always picks NopSigner.
 // Otherwise GPGSigner is used, requiring a non-empty signing_key in config so
-// gpg has a default key to sign with.
+// gpg has a default key to sign with. Whitespace-only keys are treated as
+// empty here (rather than at config-load time, where they're tolerated so
+// add/delete/verify don't regress when signing_key is unset) — passing a
+// whitespace value through to gpg would fail later with a confusing error.
 func pickSigner(noSign bool, keyID string) (sign.Signer, error) {
 	if noSign {
 		return sign.NopSigner{}, nil
 	}
-	if keyID == "" {
+	if strings.TrimSpace(keyID) == "" {
 		return nil, errors.New("config.signing_key is empty (set it or pass --no-sign)")
 	}
 	return sign.GPGSigner{KeyID: keyID}, nil
-}
-
-// loadPublishConfig parses config.yaml when present. A missing file falls back
-// to an empty Config so SuiteOrDefault still synthesizes sensible defaults.
-func loadPublishConfig(root string) (*config.Config, error) {
-	path := filepath.Join(root, "config.yaml")
-	_, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return &config.Config{Suites: map[string]config.SuiteConfig{}}, nil
-		}
-		return nil, fmt.Errorf("checking %s: %w", path, err)
-	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
-	}
-	return cfg, nil
 }
 
 // publishScope rebuilds one suite's dists tree, signs Release, and atomically
@@ -155,10 +136,10 @@ func loadPublishConfig(root string) (*config.Config, error) {
 // different snapshots), and so two concurrent publishes on the same suite
 // cannot race the staging directories (one's cleanStaging would otherwise
 // `os.RemoveAll` the other's in-flight `.new`).
-func publishScope(ctx context.Context, root string, r *repo.Repo, cfg *config.Config,
+func publishScope(ctx context.Context, publicDir string, r *repo.Repo, cfg *config.Config,
 	signer sign.Signer, distro, suite string) error {
 	if err := r.WithWriterLock(ctx, func(ctx context.Context, _ *sql.Conn) error {
-		return publishScopeLocked(ctx, root, r, cfg, signer, distro, suite)
+		return publishScopeLocked(ctx, publicDir, r, cfg, signer, distro, suite)
 	}); err != nil {
 		return fmt.Errorf("publish transaction: %w", err)
 	}
@@ -169,9 +150,9 @@ func publishScope(ctx context.Context, root string, r *repo.Repo, cfg *config.Co
 // lock. Reads through r.db still see the latest committed state; the lock's
 // role is to block other writers (add/delete/verify --gc/concurrent
 // publishScope) from committing until the swap completes.
-func publishScopeLocked(ctx context.Context, root string, r *repo.Repo, cfg *config.Config,
+func publishScopeLocked(ctx context.Context, publicDir string, r *repo.Repo, cfg *config.Config,
 	signer sign.Signer, distro, suite string) (err error) {
-	distsParent := filepath.Join(root, distro, distsDir)
+	distsParent := filepath.Join(publicDir, distro, distsDir)
 	livePath := filepath.Join(distsParent, suite)
 	newPath := livePath + suiteSuffixNew
 	oldPath := livePath + suiteSuffixOld
@@ -452,7 +433,7 @@ func swapDists(distsParent, live, fresh, old string) error {
 // Including filesystem scopes ensures that suites which were emptied by
 // `delete` still get republished (with empty indexes) so apt clients stop
 // seeing the stale Packages files.
-func allScopes(ctx context.Context, root string, r *repo.Repo) ([]scope, error) {
+func allScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, error) {
 	seen := map[scope]struct{}{}
 
 	dbScopes, err := dbScopes(ctx, r)
@@ -463,7 +444,7 @@ func allScopes(ctx context.Context, root string, r *repo.Repo) ([]scope, error) 
 		seen[s] = struct{}{}
 	}
 
-	fsScopes, err := filesystemScopes(root)
+	fsScopes, err := filesystemScopes(publicDir)
 	if err != nil {
 		return nil, err
 	}
@@ -517,24 +498,23 @@ func dbScopes(ctx context.Context, r *repo.Repo) ([]scope, error) {
 	return out, nil
 }
 
-// filesystemScopes walks <root>/<distro>/dists/<suite>/ to discover suites
-// with an existing live tree on disk. The outer loop reads top-level <root>
-// entries and treats each directory that passes validateScopeName and
-// contains a dists/ subdirectory as a candidate distro — stray files at root
-// (repo.db, config.yaml, pubkey.asc) and arbitrary user-created dirs are
-// skipped, and the validateScopeName gate prevents a malformed top-level
-// directory name from triggering atomic-swap operations on unrelated content.
-// Staging siblings (.new, .old) are skipped at the suite level, and only
-// directories that contain a Release file are treated as publish targets —
-// without that gate, a stray directory under dists/ would be wiped by the
-// atomic swap on the next publish (no flags).
-func filesystemScopes(root string) ([]scope, error) {
-	topLevel, err := os.ReadDir(root)
+// filesystemScopes walks <publicDir>/<distro>/dists/<suite>/ to discover
+// suites with an existing live tree on disk. The outer loop reads top-level
+// <publicDir> entries and treats each directory that passes validateScopeName
+// and contains a dists/ subdirectory as a candidate distro — arbitrary
+// user-created top-level dirs are skipped, and the validateScopeName gate
+// prevents a malformed top-level directory name from triggering atomic-swap
+// operations on unrelated content. Staging siblings (.new, .old) are skipped
+// at the suite level, and only directories that contain a Release file are
+// treated as publish targets — without that gate, a stray directory under
+// dists/ would be wiped by the atomic swap on the next publish (no flags).
+func filesystemScopes(publicDir string) ([]scope, error) {
+	topLevel, err := os.ReadDir(publicDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading %s: %w", root, err)
+		return nil, fmt.Errorf("reading %s: %w", publicDir, err)
 	}
 	var out []scope
 	for _, d := range topLevel {
@@ -544,7 +524,7 @@ func filesystemScopes(root string) ([]scope, error) {
 		if err := validateScopeName("distro", d.Name()); err != nil {
 			continue
 		}
-		suitesPath := filepath.Join(root, d.Name(), distsDir)
+		suitesPath := filepath.Join(publicDir, d.Name(), distsDir)
 		info, err := os.Stat(suitesPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {

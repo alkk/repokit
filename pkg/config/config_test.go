@@ -35,10 +35,13 @@ func TestLoad(t *testing.T) {
 		assert.Equal(t, "debian bullseye", bullseye.Description, "missing description should default")
 	})
 
-	t.Run("missing signing_key returns ErrMissingSigningKey", func(t *testing.T) {
-		_, err := Load("testdata/invalid_missing_key.yaml")
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrMissingSigningKey)
+	t.Run("missing signing_key is accepted at load time", func(t *testing.T) {
+		// publish enforces signing_key when --no-sign is absent (via pickSigner);
+		// add/delete/verify never need it. config.Load must not gate on it or
+		// commands that don't sign would regress when config.yaml omits the key.
+		c, err := Load("testdata/invalid_missing_key.yaml")
+		require.NoError(t, err)
+		assert.Empty(t, c.SigningKey)
 	})
 
 	t.Run("nonexistent file returns wrapped error", func(t *testing.T) {
@@ -56,13 +59,13 @@ func TestLoad(t *testing.T) {
 		assert.Contains(t, err.Error(), "parsing")
 	})
 
-	t.Run("blank signing_key returns ErrMissingSigningKey", func(t *testing.T) {
+	t.Run("blank signing_key is accepted at load time", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "blank.yaml")
 		require.NoError(t, os.WriteFile(path, []byte("signing_key: \"   \"\n"), 0o600))
 
-		_, err := Load(path)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrMissingSigningKey)
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, "   ", c.SigningKey)
 	})
 
 	t.Run("signing_key with newline is rejected", func(t *testing.T) {
@@ -104,6 +107,59 @@ func TestLoad(t *testing.T) {
 		_, err := Load(path)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "<distro>/<suite>")
+	})
+
+	t.Run("valid public_dir is parsed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "pubdir.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\npublic_dir: \"/srv/repokit\"\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, "/srv/repokit", c.PublicDir)
+	})
+
+	t.Run("empty public_dir is accepted at load time", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "empty.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\npublic_dir: \"\"\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Empty(t, c.PublicDir)
+	})
+
+	t.Run("public_dir with newline is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "pdnl.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\npublic_dir: \"/srv\\nInjected: y\"\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "public_dir")
+		assert.Contains(t, err.Error(), "control")
+	})
+
+	t.Run("public_dir with NUL is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "pdnul.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\npublic_dir: \"/srv\\0evil\"\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "public_dir")
+		assert.Contains(t, err.Error(), "control")
+	})
+
+	t.Run("public_dir with control char is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "pdctl.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\npublic_dir: \"/srv\\u0007bell\"\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "public_dir")
+		assert.Contains(t, err.Error(), "control")
 	})
 
 	t.Run("suite header newline is rejected per field", func(t *testing.T) {

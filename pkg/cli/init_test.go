@@ -11,6 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// withDefaultStateDir swaps the package-level defaultStateDir for the duration
+// of a test so resolution does not touch the real ~/.repokit/.
+func withDefaultStateDir(t *testing.T, path string) {
+	t.Helper()
+	prev := defaultStateDir
+	defaultStateDir = func() (string, error) { return path, nil }
+	t.Cleanup(func() { defaultStateDir = prev })
+}
+
 func TestInitFreshDir(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "repo")
@@ -102,10 +111,99 @@ func TestInitConfigTemplateRoundTrip(t *testing.T) {
 func TestInitNonInitCommandRequiresRepoDB(t *testing.T) {
 	empty := t.TempDir()
 	t.Setenv(envRepo, "")
-	t.Chdir(empty)
+	withDefaultStateDir(t, empty)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"list"}, &stdout, &stderr, "test-rev")
 	assert.Equal(t, ExitError, code)
 	assert.Contains(t, stderr.String(), "no repo.db")
+}
+
+func TestInitDefaultsToHomeDir(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), ".repokit")
+	t.Setenv(envRepo, "")
+	withDefaultStateDir(t, stateDir)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	_, err := os.Stat(filepath.Join(stateDir, dbFilename))
+	require.NoError(t, err)
+	cfg, err := config.Load(filepath.Join(stateDir, "config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "REPLACE_ME", cfg.SigningKey)
+	assert.Equal(t, "REPLACE_ME", cfg.PublicDir)
+}
+
+func TestInitPositionalBeatsDefault(t *testing.T) {
+	defaultDir := filepath.Join(t.TempDir(), "default")
+	explicit := filepath.Join(t.TempDir(), "explicit")
+	t.Setenv(envRepo, "")
+	withDefaultStateDir(t, defaultDir)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"init", explicit}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	_, err := os.Stat(filepath.Join(explicit, dbFilename))
+	require.NoError(t, err, "positional path should be initialized")
+	_, err = os.Stat(defaultDir)
+	assert.True(t, os.IsNotExist(err), "default dir should not be touched when positional given")
+}
+
+func TestInitFlagBeatsDefault(t *testing.T) {
+	defaultDir := filepath.Join(t.TempDir(), "default")
+	custom := filepath.Join(t.TempDir(), "custom")
+	t.Setenv(envRepo, "")
+	withDefaultStateDir(t, defaultDir)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", custom, "init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	_, err := os.Stat(filepath.Join(custom, dbFilename))
+	require.NoError(t, err)
+	_, err = os.Stat(defaultDir)
+	assert.True(t, os.IsNotExist(err), "default dir should not be touched when --repo given")
+}
+
+// TestRunInitWithPositionalWithoutHomeDir guards against init regressing to
+// require a resolvable home directory when the operator supplied a positional
+// path. resolveRepoRoot fails on defaultStateDir before init can use the
+// override otherwise — minimal containers / CI sandboxes without $HOME.
+func TestRunInitWithPositionalWithoutHomeDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "explicit")
+	t.Setenv(envRepo, "")
+	prev := defaultStateDir
+	defaultStateDir = func() (string, error) { return "", assert.AnError }
+	t.Cleanup(func() { defaultStateDir = prev })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"init", root}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	_, err := os.Stat(filepath.Join(root, dbFilename))
+	require.NoError(t, err)
+}
+
+// TestRunInitWithoutPositionalWithoutHomeDir guards the inverse: when neither
+// a positional path nor --repo / $REPOKIT_ROOT is set and home-dir resolution
+// fails, init must surface a clear error instead of silently calling
+// MkdirAll("") and producing a confusing low-level message.
+func TestRunInitWithoutPositionalWithoutHomeDir(t *testing.T) {
+	t.Setenv(envRepo, "")
+	prev := defaultStateDir
+	defaultStateDir = func() (string, error) { return "", assert.AnError }
+	t.Cleanup(func() { defaultStateDir = prev })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), "no repo root resolved")
+}
+
+func TestConfigTemplateHasPublicDirPlaceholder(t *testing.T) {
+	assert.Contains(t, configTemplate, `public_dir: "REPLACE_ME"`,
+		"configTemplate must include a public_dir REPLACE_ME placeholder")
 }

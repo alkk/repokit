@@ -9,6 +9,15 @@ the database, so `publish` only re-emits them — unlike freight-style tools tha
 recompute on every run. Multiple distros and multiple suites per distro are
 supported with isolated per-(distro, suite) pools (no cross-suite dedup).
 
+> **Breaking change**: as of this release the state dir (`repo.db` +
+> `config.yaml`) and the public apt tree (`<distro>/pool/` +
+> `<distro>/dists/`) live in separate directories. `REPOKIT_ROOT` now points
+> at the state dir only and defaults to `~/.repokit/`; the public dir is
+> configured via `public_dir` in `config.yaml` (or `--public` /
+> `$REPOKIT_PUBLIC`). See [Layout](#layout) and [Quickstart](#quickstart)
+> below. There is no migration helper — move existing `<distro>/` trees
+> into the new public dir manually.
+
 ## Build
 
 ```
@@ -53,30 +62,48 @@ shows it before running `publish` without `--no-sign`.
 
 See [docs/usage.md](docs/usage.md) for the full flag reference.
 
+## Layout
+
+`repokit` separates **state** (private to the operator) from the **public**
+apt tree (served by your webserver):
+
+| Dir | Holds | Default | Override |
+|---|---|---|---|
+| state dir | `repo.db`, `config.yaml` | `~/.repokit/` | `--repo` / `$REPOKIT_ROOT` |
+| public dir | `<distro>/pool/`, `<distro>/dists/` | none — operator must set | `--public` / `$REPOKIT_PUBLIC` / `public_dir` in `config.yaml` |
+
+Point your webserver's docroot at the public dir. The state dir holds the
+signing config and SQLite database — never serve it.
+
+The state dir is resolved from `--repo` > `$REPOKIT_ROOT` > `~/.repokit/`. The
+current working directory is **not** consulted. Every command except `init`
+and `info` requires a `repo.db` in the resolved state dir; commands that
+touch the public tree (`add`, `delete`, `publish`, `verify`) additionally
+require the public dir to be set and to exist.
+
 ## Quickstart
 
 ```sh
-# 1. Initialize a new repository
-repokit init /srv/apt
+# 1. Initialize state at the default ~/.repokit/
+repokit init
 
-# 2. Edit /srv/apt/config.yaml and set signing_key to a fingerprint your gpg
-#    agent has the secret key for (or pass --no-sign on publish for unsigned
-#    test repos).
+# 2. Create the public tree (repokit does not auto-create it)
+sudo mkdir -p /srv/apt
+sudo chown "$USER" /srv/apt
 
-# 3. Stage some packages
-repokit --repo /srv/apt add --distro debian --suite bookworm \
+# 3. Edit ~/.repokit/config.yaml — set signing_key to a fingerprint your gpg
+#    agent has the secret key for, and set public_dir to the directory above
+#    (or pass --public /srv/apt on every command, or export REPOKIT_PUBLIC).
+
+# 4. Stage some packages
+repokit add --distro debian --suite bookworm \
     ./hello_1.0_amd64.deb ./world_2.1_amd64.deb
 
-# 4. Publish: build dists/, sign Release, atomically swap into place
-repokit --repo /srv/apt publish --distro debian --suite bookworm
+# 5. Publish: build dists/, sign Release, atomically swap into place
+repokit publish --distro debian --suite bookworm
 
-# 5. Rsync the static tree to the CDN (out of scope for repokit)
-rsync -av /srv/apt/debian/ deploy@cdn:/var/www/apt/debian/
+# 6. Point a webserver docroot at /srv/apt and you're done.
 ```
-
-The repo root is resolved from `--repo` (or `-r`), then `$REPOKIT_ROOT`, then
-the current working directory. Every command except `init` and `info` requires a
-`repo.db` at the resolved root.
 
 ## Consuming the repo with apt
 

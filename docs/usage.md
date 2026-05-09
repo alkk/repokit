@@ -10,12 +10,33 @@ These apply to every subcommand and must precede the subcommand name.
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `-r`, `--repo <path>` | `REPOKIT_ROOT` | current working directory | repository root |
+| `-r`, `--repo <path>` | `REPOKIT_ROOT` | `~/.repokit/` | path to the state dir (`repo.db` + `config.yaml`) |
+| `-p`, `--public <path>` | `REPOKIT_PUBLIC` | from `public_dir` in `config.yaml` | path to the public-facing tree (`<distro>/pool/` + `<distro>/dists/`) |
 | `-q`, `--quiet` | — | off | suppress non-error output |
 | `-h`, `--help` | — | — | print help for the parser or active subcommand |
 
-Repo-root resolution is `--repo` > `$REPOKIT_ROOT` > cwd. Every subcommand
-except `init` and `info` requires the resolved root to contain a `repo.db`.
+`repokit` keeps two independent paths:
+
+- **State dir** — holds `repo.db` and `config.yaml`. Resolution chain:
+  `--repo` > `$REPOKIT_ROOT` > `~/.repokit/`. The current working directory
+  is **not** consulted. Every subcommand except `init` and `info` requires
+  the resolved state dir to contain a `repo.db`.
+- **Public dir** — holds the per-distro `pool/` and `dists/` subtrees that a
+  webserver will expose. Resolution chain: `--public` > `$REPOKIT_PUBLIC` >
+  `public_dir` field in `<state-dir>/config.yaml`. Required for `add`,
+  `delete`, `publish`, and `verify`; ignored by `init`, `info`, `list`, and
+  `search`. The path must be **absolute**, must already **exist** as a
+  directory (`repokit` does not create it), must not contain control or NUL
+  characters, and must not equal or be nested with the state dir in either
+  direction (a leak would put `repo.db` and `config.yaml` under the
+  webserver's docroot).
+
+When `public_dir` is unset (or still the `REPLACE_ME` placeholder) and no
+flag/env override is given, the affected commands fail with:
+
+```
+public_dir is not set: edit <state-dir>/config.yaml or pass --public / $REPOKIT_PUBLIC
+```
 
 Scope flag values (`--distro`, `--suite`, `--component`, `--arch`) are
 validated against path-traversal and Release-injection vectors. They must not
@@ -36,20 +57,26 @@ staging siblings.
 
 ### `init`
 
-Create a new repository. Writes an empty `repo.db` with the current schema and
-a starter `config.yaml` at the repo root. Per-distro `pool/` and `dists/`
-subtrees are created on demand by the first `add` and `publish`.
+Create a new state dir. Writes an empty `repo.db` with the current schema and
+a starter `config.yaml` at the resolved state dir (default `~/.repokit/`).
+The state dir itself is created if missing. The public dir and per-distro
+`pool/` and `dists/` subtrees are **not** touched by `init` — operators must
+create the public dir manually and either set `public_dir` in the generated
+`config.yaml` or pass `--public` / `$REPOKIT_PUBLIC` to subsequent commands.
 
 ```
-repokit init [<repo-root>]
+repokit init [<state-dir>]
 ```
 
 | Argument | Description |
 |---|---|
-| `<repo-root>` (positional, optional) | overrides `--repo` for this invocation |
+| `<state-dir>` (positional, optional) | overrides `--repo` and `$REPOKIT_ROOT` for this invocation |
 
-Errors if `<root>/repo.db` already exists. A pre-existing `config.yaml` is left
-untouched.
+Errors if `<state-dir>/repo.db` already exists. A pre-existing `config.yaml`
+is left untouched. The starter `config.yaml` contains `signing_key:
+"REPLACE_ME"` and `public_dir: "REPLACE_ME"` — both must be edited before
+`publish` (without `--no-sign`) and any `add` / `delete` / `publish` /
+`verify` invocation respectively will succeed.
 
 ### `add`
 
@@ -170,10 +197,10 @@ every suite with at least one row in the packages table, plus every suite that
 already has a live `<distro>/dists/<suite>/Release` on disk. The filesystem
 half ensures that a suite emptied by `delete` is republished with empty
 indexes so apt clients stop seeing the stale `Packages`/`Release` files. Top-
-level repo-root entries that aren't directories or whose names fail
-distro-name validation, and directories that don't contain a `dists/`
-subdirectory, are skipped — so stray files (`repo.db`, `config.yaml`,
-`pubkey.asc`) and unrelated user-created dirs don't trigger spurious distros.
+level entries under the public dir that aren't directories or whose names
+fail distro-name validation, and directories that don't contain a `dists/`
+subdirectory, are skipped — so unrelated user-created top-level files or
+directories don't trigger spurious distros.
 Staging siblings (`<suite>.new`, `<suite>.old`) and directories without a
 `Release` file under `<distro>/dists/` are likewise skipped.
 
@@ -229,7 +256,7 @@ successful write at the same path.
 ### `info`
 
 Inspect a single `.deb` file and print what `add` would do, without touching
-the repo. Does not require a `repo.db` at the resolved root.
+the repo. Does not require a `repo.db` at the resolved state dir.
 
 ```
 repokit info [--distro <d> --suite <s> [--component <c>]] <deb>
@@ -245,11 +272,13 @@ supplied — otherwise a hint is printed).
 
 ## Configuration file
 
-`config.yaml` lives at the repo root and is read by `publish`. A starter
-template is written by `init`.
+`config.yaml` lives in the state dir (the same directory as `repo.db`) and is
+read by every command that resolves a public dir or signs `Release`. A
+starter template is written by `init`.
 
 ```yaml
-signing_key: "DEADBEEF1234..."   # gpg key id or fingerprint (required)
+signing_key: "DEADBEEF1234..."   # gpg key id or fingerprint (required for signed publish)
+public_dir: "/srv/apt"           # absolute path the webserver docroot points at
 
 suites:
   debian/bookworm:
@@ -265,7 +294,8 @@ suites:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `signing_key` | string | yes | — | gpg key id or fingerprint that signs `Release` |
+| `signing_key` | string | yes (unless `--no-sign`) | — | gpg key id or fingerprint that signs `Release` |
+| `public_dir` | string | yes for add/delete/publish/verify (unless `--public` / `$REPOKIT_PUBLIC` is set) | — | absolute path to the public-facing tree |
 | `suites` | map | no | `{}` | per-suite Release header overrides keyed by `<distro>/<suite>` |
 | `suites[k].origin` | string | no | `<distro>` | `Origin:` field in `Release` |
 | `suites[k].label` | string | no | `<distro>` | `Label:` field in `Release` |
@@ -282,16 +312,33 @@ placeholder — leaving it as-is and running `publish` without `--no-sign` will
 pass `REPLACE_ME` to `gpg --default-key` verbatim, which fails with a gpg-side
 error. Pass `--no-sign` for unsigned test repos.
 
+`public_dir` is treated as unset when missing or left as `REPLACE_ME`. The
+flag and env var (`--public` / `$REPOKIT_PUBLIC`) take precedence — useful
+for one-off invocations against a non-default tree without editing
+`config.yaml`.
+
 ## On-disk layout
 
-Each `<distro>` subtree is a self-contained apt repo root: an apt client
-points `URI` at `<server-root>/<distro>` and resolves
-`dists/<suite>/Release` relative to that base.
+`repokit` keeps the operator's private state and the apt-facing public tree
+in two **separate directories** so the webserver docroot can point at the
+public tree without exposing `repo.db` or the signing config. Each `<distro>`
+subtree under the public dir is a self-contained apt repo root: an apt client
+points `URI` at `<server-root>/<distro>` and resolves `dists/<suite>/Release`
+relative to that base.
+
+State dir (`--repo` / `$REPOKIT_ROOT` / `~/.repokit/`):
 
 ```
-<repo-root>/
-├── repo.db                     # SQLite — sole source of truth for metadata (shared)
-├── config.yaml                 # signing key + per-suite Release overrides (shared)
+<state-dir>/
+├── repo.db        # SQLite — sole source of truth for metadata (shared)
+└── config.yaml    # signing key, public_dir, per-suite Release overrides
+```
+
+Public dir (`--public` / `$REPOKIT_PUBLIC` / `public_dir` in config.yaml) —
+**this is what the webserver serves**:
+
+```
+<public-dir>/
 └── <distro>/                   # one subtree per distro — its own apt repo root
     ├── pool/
     │   └── <suite>/<component>/<letter>/<source>/<pkg>_<ver>_<arch>.deb
@@ -319,8 +366,42 @@ form the download URL.
 
 Pools are isolated per `(distro, suite)`: the same NVRA added to two suites of
 the same distro produces two separate physical files at
-`<root>/<distro>/pool/<suite>/...` with identical content. There is no
+`<public-dir>/<distro>/pool/<suite>/...` with identical content. There is no
 cross-suite dedup.
+
+### Webserver docroot
+
+Point your webserver at `<public-dir>` directly. nginx:
+
+```nginx
+server {
+    listen 80;
+    server_name apt.example.com;
+    root /srv/apt;          # = public_dir
+    autoindex on;           # optional — apt does not require directory listings
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+```
+
+Apache 2.4:
+
+```apache
+<VirtualHost *:80>
+    ServerName apt.example.com
+    DocumentRoot /srv/apt
+    <Directory /srv/apt>
+        Require all granted
+        Options +Indexes
+    </Directory>
+</VirtualHost>
+```
+
+Do **not** point a vhost at the state dir — `repo.db` and `config.yaml` are
+not meant for public consumption. Keep the state dir somewhere the webserver
+user has no read access (the `~/.repokit/` default already satisfies this for
+typical setups where the webserver runs as `www-data`).
 
 ## Database schema
 
@@ -336,7 +417,7 @@ CREATE TABLE packages (
     architecture  TEXT NOT NULL,
     name          TEXT NOT NULL,
     version       TEXT NOT NULL,
-    filename      TEXT NOT NULL,         -- apt-relative path; no distro prefix (relative to <root>/<distro>)
+    filename      TEXT NOT NULL,         -- apt-relative path; no distro prefix (resolves on disk to <public-dir>/<distro>/<filename>)
     size          INTEGER NOT NULL,
     md5           TEXT NOT NULL,
     sha1          TEXT NOT NULL,

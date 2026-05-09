@@ -16,22 +16,23 @@ import (
 )
 
 // runVerify invokes the verify subcommand with the supplied flags after the
-// global --repo flag. Returns exit code, stdout, stderr.
-func runVerify(t *testing.T, root string, args ...string) (int, string, string) {
+// global --repo and --public flags. Returns exit code, stdout, stderr.
+func runVerify(t *testing.T, state, public string, args ...string) (int, string, string) {
 	t.Helper()
-	full := append([]string{"--repo", root, "verify"}, args...)
+	full := append([]string{"--repo", state, "--public", public, "verify"}, args...)
 	var stdout, stderr bytes.Buffer
 	code := Run(full, &stdout, &stderr, "test-rev")
 	return code, stdout.String(), stderr.String()
 }
 
 func TestVerifyCleanRepoPasses(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
-	addFixtureForTest(t, root, "bookworm", "hello-xz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-xz_1.0_amd64.deb")
 
-	code, stdout, stderr := runVerify(t, root)
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "mismatch")
@@ -40,46 +41,49 @@ func TestVerifyCleanRepoPasses(t *testing.T) {
 }
 
 func TestVerifyTamperedFileDetected(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	tampered := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+	tampered := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.WriteFile(tampered, []byte("not a real deb"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root)
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "mismatch debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 mismatch(es)")
 }
 
 func TestVerifyMissingPoolFileDetected(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	target := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+	target := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.Remove(target))
 
-	code, stdout, stderr := runVerify(t, root)
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "missing debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 missing")
 }
 
 func TestVerifyOrphanDetected(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	orphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
+	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root)
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 orphan(s)")
@@ -88,54 +92,57 @@ func TestVerifyOrphanDetected(t *testing.T) {
 }
 
 func TestVerifyGCRemovesOnlyOrphan(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	legit := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+	legit := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
-	orphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
+	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb (removed)")
 	assert.Contains(t, stdout, "verify: ok")
 
 	assert.NoFileExists(t, orphan, "--gc must remove orphan")
 	assert.FileExists(t, legit, "--gc must leave legit pool files in place")
-	assert.Equal(t, 1, rowCount(t, root), "--gc must not touch DB rows")
+	assert.Equal(t, 1, rowCount(t, tmpState), "--gc must not touch DB rows")
 }
 
 func TestVerifyGCDoesNotRemoveRowsForMissingPoolFiles(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	target := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+	target := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.Remove(target))
 
-	code, stdout, stderr := runVerify(t, root, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
 	require.Equal(t, ExitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "missing")
-	assert.Equal(t, 1, rowCount(t, root), "rows for missing pool files must survive --gc")
+	assert.Equal(t, 1, rowCount(t, tmpState), "rows for missing pool files must survive --gc")
 }
 
 func TestVerifyScopedToSuiteIgnoresOtherSuites(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
-	addFixtureForTest(t, root, "bullseye", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+	addFixtureForTest(t, tmpState, tmpPublic, "bullseye", "hello-gz_1.0_amd64.deb")
 
-	otherOrphan := filepath.Join(root, "debian", "pool", "bullseye", "main", "g", "ghost",
+	otherOrphan := filepath.Join(tmpPublic, "debian", "pool", "bullseye", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(otherOrphan), 0o755))
 	require.NoError(t, os.WriteFile(otherOrphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root, "--distro", "debian", "--suite", "bookworm")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "debian", "--suite", "bookworm")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "ghost", "out-of-scope orphan must not be reported")
@@ -143,19 +150,21 @@ func TestVerifyScopedToSuiteIgnoresOtherSuites(t *testing.T) {
 }
 
 func TestVerifySuiteWithoutDistroErrors(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	code, _, stderr := runVerify(t, root, "--suite", "bookworm")
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--suite", "bookworm")
 	require.Equal(t, ExitError, code)
 	assert.Contains(t, stderr, "--suite requires --distro")
 }
 
 func TestVerifyEmptyRepoPasses(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	code, stdout, stderr := runVerify(t, root)
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 }
@@ -165,25 +174,26 @@ func TestVerifyEmptyRepoPasses(t *testing.T) {
 // collapsed the distro-only case to either the suite-scoped or root path would
 // silently include or exclude the wrong subtree of orphans.
 func TestVerifyScopedToDistroCoversAllSuites(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
-	addFixtureForTest(t, root, "bullseye", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+	addFixtureForTest(t, tmpState, tmpPublic, "bullseye", "hello-gz_1.0_amd64.deb")
 
-	bookOrphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
+	bookOrphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost-book_1.0_amd64.deb")
-	bullOrphan := filepath.Join(root, "debian", "pool", "bullseye", "main", "g", "ghost",
+	bullOrphan := filepath.Join(tmpPublic, "debian", "pool", "bullseye", "main", "g", "ghost",
 		"ghost-bull_1.0_amd64.deb")
 	for _, p := range []string{bookOrphan, bullOrphan} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte("orphan"), 0o644))
 	}
-	otherDistroOrphan := filepath.Join(root, "ubuntu", "pool", "noble", "main", "g", "ghost",
+	otherDistroOrphan := filepath.Join(tmpPublic, "ubuntu", "pool", "noble", "main", "g", "ghost",
 		"ghost-noble_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(otherDistroOrphan), 0o755))
 	require.NoError(t, os.WriteFile(otherDistroOrphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root, "--distro", "debian", "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "debian", "--gc")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "ghost-book", "distro-scoped verify must cover bookworm")
 	assert.Contains(t, stdout, "ghost-bull", "distro-scoped verify must cover bullseye")
@@ -200,16 +210,17 @@ func TestVerifyScopedToDistroCoversAllSuites(t *testing.T) {
 // still references dest; classifying these as orphans would turn a recoverable
 // state into permanent data loss.
 func TestVerifyGCPreservesPoolWriteArtifacts(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	dest := filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+	dest := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb")
 	require.NoError(t, os.WriteFile(dest+".bak", []byte("old bytes"), 0o644))
 	require.NoError(t, os.WriteFile(dest+".tmp", []byte("new bytes"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.NotContains(t, stdout, ".bak", "pool-write .bak must not be reported as orphan")
 	assert.NotContains(t, stdout, ".tmp", "pool-write .tmp must not be reported as orphan")
@@ -224,11 +235,12 @@ func TestVerifyGCPreservesPoolWriteArtifacts(t *testing.T) {
 // separate connection (mimicking add's INSERT-to-COMMIT window) must block
 // verify --gc until release.
 func TestVerifyGCSerializesWithConcurrentWriter(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	r, err := repo.Open(context.Background(), filepath.Join(root, dbFilename))
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 
@@ -251,7 +263,7 @@ func TestVerifyGCSerializesWithConcurrentWriter(t *testing.T) {
 		stderr string
 	}, 1)
 	go func() {
-		code, _, stderr := runVerify(t, root, "--gc")
+		code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
 		verifyDone <- struct {
 			code   int
 			stderr string
@@ -279,28 +291,29 @@ func TestVerifyGCSerializesWithConcurrentWriter(t *testing.T) {
 // path: with no --distro flag, verify must enumerate every distro and walk
 // each per-distro pool tree, reporting orphans from all of them.
 func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--repo", root, "add",
+		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "ubuntu", "--suite", "noble",
 		fixtureDeb(t, "hello-gz_1.0_amd64.deb"),
 	}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "fixture add for ubuntu failed: %s", stderr.String())
 
-	debianOrphan := filepath.Join(root, "debian", "pool", "bookworm", "main", "g", "ghost",
+	debianOrphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost-deb_1.0_amd64.deb")
-	ubuntuOrphan := filepath.Join(root, "ubuntu", "pool", "noble", "main", "g", "ghost",
+	ubuntuOrphan := filepath.Join(tmpPublic, "ubuntu", "pool", "noble", "main", "g", "ghost",
 		"ghost-ubu_1.0_amd64.deb")
 	for _, p := range []string{debianOrphan, ubuntuOrphan} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte("orphan"), 0o644))
 	}
 
-	code, out, errOut := runVerify(t, root, "--gc")
+	code, out, errOut := runVerify(t, tmpState, tmpPublic, "--gc")
 	require.Equal(t, ExitOK, code, "stderr: %s", errOut)
 	assert.Contains(t, out, "orphan debian/pool/bookworm/main/g/ghost/ghost-deb_1.0_amd64.deb (removed)")
 	assert.Contains(t, out, "orphan ubuntu/pool/noble/main/g/ghost/ghost-ubu_1.0_amd64.deb (removed)")
@@ -315,30 +328,64 @@ func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
 // failed to clean up the pool file). The disk side of the union must
 // still pull the distro into the orphan walk.
 func TestVerifyUnscopedFindsOrphansInDBEmptyDistro(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
 
-	orphan := filepath.Join(root, "ubuntu", "pool", "noble", "main", "g", "ghost",
+	orphan := filepath.Join(tmpPublic, "ubuntu", "pool", "noble", "main", "g", "ghost",
 		"ghost_1.0_amd64.deb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, root, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
 	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan ubuntu/pool/noble/main/g/ghost/ghost_1.0_amd64.deb (removed)")
 	assert.NoFileExists(t, orphan, "--gc must reclaim orphans even when the distro has no DB rows")
 }
 
 func TestVerifyRejectsUnsafeScope(t *testing.T) {
-	root := t.TempDir()
-	initRepoForTest(t, root)
-	addFixtureForTest(t, root, "bookworm", "hello-gz_1.0_amd64.deb")
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	sentinel := filepath.Join(root, "sentinel.txt")
+	sentinel := filepath.Join(tmpPublic, "sentinel.txt")
 	require.NoError(t, os.WriteFile(sentinel, []byte("must survive"), 0o644))
 
-	code, _, stderr := runVerify(t, root, "--gc", "--distro", "..")
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc", "--distro", "..")
 	require.Equal(t, ExitError, code)
 	assert.Contains(t, stderr, "--distro")
 	assert.FileExists(t, sentinel, "sentinel outside pool/ must not be touched by verify --gc")
+}
+
+// TestVerifyDoesNotTouchStateDir is a focused regression check that verify's
+// pool walks read from ctx.PublicDir, not ctx.Root: if a same-named decoy
+// orphan file is planted under tmpState's mirrored layout, --gc must not see
+// or remove it because state-dir contents are outside verify's search space.
+func TestVerifyDoesNotTouchStateDir(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	stateDecoy := filepath.Join(tmpState, "debian", "pool", "bookworm", "main", "g", "ghost",
+		"ghost_1.0_amd64.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stateDecoy), 0o755))
+	require.NoError(t, os.WriteFile(stateDecoy, []byte("decoy under state"), 0o644))
+
+	statePre, err := os.ReadDir(tmpState)
+	require.NoError(t, err)
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "verify: ok")
+	assert.NotContains(t, stdout, "ghost", "verify must not visit pool trees inside the state dir")
+
+	assert.FileExists(t, stateDecoy, "verify --gc must not unlink anything under the state dir")
+	assert.FileExists(t, filepath.Join(tmpState, configFilename), "config.yaml must remain untouched")
+	assert.FileExists(t, filepath.Join(tmpState, dbFilename), "repo.db must remain untouched")
+
+	statePost, err := os.ReadDir(tmpState)
+	require.NoError(t, err)
+	assert.Len(t, statePost, len(statePre), "state dir top-level entry count must not change")
 }

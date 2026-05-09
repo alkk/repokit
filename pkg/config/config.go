@@ -10,13 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrMissingSigningKey is returned when the config file does not declare a
-// signing_key value.
-var ErrMissingSigningKey = errors.New("config: signing_key is required")
-
 // Config is the parsed repokit config file.
 type Config struct {
 	SigningKey string                 `yaml:"signing_key"`
+	PublicDir  string                 `yaml:"public_dir"`
 	Suites     map[string]SuiteConfig `yaml:"suites"`
 }
 
@@ -39,11 +36,15 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, c); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	if strings.TrimSpace(c.SigningKey) == "" {
-		return nil, ErrMissingSigningKey
-	}
 	if err := validateSigningKey(c.SigningKey); err != nil {
 		return nil, err
+	}
+	if c.PublicDir != "" {
+		for _, r := range c.PublicDir {
+			if r < 0x20 || r == 0x7f {
+				return nil, errors.New("config: public_dir must not contain control characters")
+			}
+		}
 	}
 	for key, suite := range c.Suites {
 		distro, name, ok := splitSuiteKey(key)
