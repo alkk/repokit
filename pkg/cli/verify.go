@@ -79,10 +79,10 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 	if cmd.Suite != "" && cmd.Distro == "" {
 		return nil, errors.New("--suite requires --distro")
 	}
-	if err := validateScopeName("distro", cmd.Distro); err != nil {
+	if err := validateScopeName(fieldDistro, cmd.Distro); err != nil {
 		return nil, err
 	}
-	if err := validateScopeName("suite", cmd.Suite); err != nil {
+	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
 		return nil, err
 	}
 
@@ -201,7 +201,7 @@ func hashAndIndex(publicDir string, rows []repo.Package, report *verifyReport) (
 // union, an unscoped verify would miss orphans in distros that have no DB
 // rows at all — e.g. a crashed add or a delete pass that removed the last
 // row but left the pool file behind. Entries whose name does not pass
-// validateScopeName("distro", ...) are skipped on both sides so arbitrary
+// validateScopeName(fieldDistro, ...) are skipped on both sides so arbitrary
 // user-created top-level dirs do not trigger spurious orphan walks, and a
 // tampered/corrupted DB row carrying ".." or a path separator cannot
 // steer the walk outside the public dir (mirrors dbScopes in publish.go).
@@ -212,7 +212,7 @@ func unionWithDiskDistros(publicDir string, dbDistros []string) ([]string, error
 		if _, ok := seen[d]; ok {
 			continue
 		}
-		if err := validateScopeName("distro", d); err != nil {
+		if err := validateScopeName(fieldDistro, d); err != nil {
 			continue
 		}
 		seen[d] = struct{}{}
@@ -234,7 +234,7 @@ func unionWithDiskDistros(publicDir string, dbDistros []string) ([]string, error
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		if err := validateScopeName("distro", name); err != nil {
+		if err := validateScopeName(fieldDistro, name); err != nil {
 			continue
 		}
 		poolPath := filepath.Join(publicDir, name, poolDirName)

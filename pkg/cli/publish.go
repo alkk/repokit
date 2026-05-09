@@ -52,10 +52,10 @@ type scope struct {
 }
 
 func (cmd *PublishCmd) run(c *Context) error {
-	if err := validateScopeName("distro", cmd.Distro); err != nil {
+	if err := validateScopeName(fieldDistro, cmd.Distro); err != nil {
 		return err
 	}
-	if err := validateScopeName("suite", cmd.Suite); err != nil {
+	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
 		return err
 	}
 
@@ -484,10 +484,10 @@ func dbScopes(ctx context.Context, r *repo.Repo) ([]scope, error) {
 		if err := rows.Scan(&sc.distro, &sc.suite); err != nil {
 			return nil, fmt.Errorf("scanning scope: %w", err)
 		}
-		if validateScopeName("distro", sc.distro) != nil {
+		if validateScopeName(fieldDistro, sc.distro) != nil {
 			continue
 		}
-		if validateScopeName("suite", sc.suite) != nil {
+		if validateScopeName(fieldSuite, sc.suite) != nil {
 			continue
 		}
 		out = append(out, sc)
@@ -521,7 +521,7 @@ func filesystemScopes(publicDir string) ([]scope, error) {
 		if !d.IsDir() {
 			continue
 		}
-		if err := validateScopeName("distro", d.Name()); err != nil {
+		if err := validateScopeName(fieldDistro, d.Name()); err != nil {
 			continue
 		}
 		suitesPath := filepath.Join(publicDir, d.Name(), distsDir)
@@ -553,7 +553,7 @@ func filesystemScopes(publicDir string) ([]scope, error) {
 				}
 				return nil, fmt.Errorf("stat %s: %w", filepath.Join(suitesPath, name, releaseFilename), err)
 			}
-			if err := validateScopeName("suite", name); err != nil {
+			if err := validateScopeName(fieldSuite, name); err != nil {
 				continue
 			}
 			out = append(out, scope{distro: d.Name(), suite: name})

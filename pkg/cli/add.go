@@ -45,7 +45,7 @@ func (cmd *AddCmd) Execute(c *Context) int {
 // in reverse order to keep the on-disk tree consistent with the DB.
 func (cmd *AddCmd) run(c *Context) error {
 	for field, val := range map[string]string{
-		"distro": cmd.Distro, "suite": cmd.Suite, "component": cmd.Component,
+		fieldDistro: cmd.Distro, fieldSuite: cmd.Suite, "component": cmd.Component,
 	} {
 		if err := requireScopeName(field, val); err != nil {
 			return err

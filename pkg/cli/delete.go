@@ -79,7 +79,7 @@ func (cmd *DeleteCmd) run(c *Context) error {
 // here.
 func (cmd *DeleteCmd) validate() error {
 	for field, val := range map[string]string{
-		"distro": cmd.Distro, "suite": cmd.Suite,
+		fieldDistro: cmd.Distro, fieldSuite: cmd.Suite,
 	} {
 		if err := requireScopeName(field, val); err != nil {
 			return fmt.Errorf("%w: %w", errDeleteUsage, err)

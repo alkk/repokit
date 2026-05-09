@@ -32,7 +32,7 @@ func (cmd *InfoCmd) Execute(c *Context) int {
 
 func (cmd *InfoCmd) run(w io.Writer) error {
 	for field, val := range map[string]string{
-		"distro": cmd.Distro, "suite": cmd.Suite, "component": cmd.Component,
+		fieldDistro: cmd.Distro, fieldSuite: cmd.Suite, "component": cmd.Component,
 	} {
 		if err := validateScopeName(field, val); err != nil {
 			return err

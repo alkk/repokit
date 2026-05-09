@@ -25,6 +25,28 @@ const (
 	placeholderValue = "REPLACE_ME"
 )
 
+// Subcommand names. The string values must match the go-flags `command:`
+// struct tags on Options; struct tags cannot reference constants, so the
+// canonical place to change a name is the tag, and these mirror it.
+const (
+	cmdInit    = "init"
+	cmdAdd     = "add"
+	cmdDelete  = "delete"
+	cmdList    = "list"
+	cmdSearch  = "search"
+	cmdPublish = "publish"
+	cmdVerify  = "verify"
+	cmdInfo    = "info"
+)
+
+// Scope field names used by validateScopeName and structured log fields. They
+// match the long-flag names so error messages quote the same identifier the
+// operator typed on the command line.
+const (
+	fieldDistro = "distro"
+	fieldSuite  = "suite"
+)
+
 // ErrRepoNotFound is returned when the resolved repo root is missing repo.db
 // and the requested command is not init.
 var ErrRepoNotFound = errors.New("no repo.db found at repo root (run 'repokit init' first)")
@@ -69,7 +91,7 @@ func validateScopeName(field, val string) error {
 			return fmt.Errorf("--%s %q: must not contain control characters or spaces", field, val)
 		}
 	}
-	if field == "suite" && (strings.HasSuffix(val, ".new") || strings.HasSuffix(val, ".old")) {
+	if field == fieldSuite && (strings.HasSuffix(val, ".new") || strings.HasSuffix(val, ".old")) {
 		return fmt.Errorf("--%s %q: suffixes '.new' and '.old' are reserved by publish staging", field, val)
 	}
 	return nil
@@ -174,21 +196,21 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 	}
 
 	switch cmd {
-	case "init":
+	case cmdInit:
 		return opts.Init.Execute(ctx)
-	case "add":
+	case cmdAdd:
 		return opts.Add.Execute(ctx)
-	case "delete":
+	case cmdDelete:
 		return opts.Delete.Execute(ctx)
-	case "list":
+	case cmdList:
 		return opts.List.Execute(ctx)
-	case "search":
+	case cmdSearch:
 		return opts.Search.Execute(ctx)
-	case "publish":
+	case cmdPublish:
 		return opts.Publish.Execute(ctx)
-	case "verify":
+	case cmdVerify:
 		return opts.Verify.Execute(ctx)
-	case "info":
+	case cmdInfo:
 		return opts.Info.Execute(ctx)
 	default:
 		fmt.Fprintf(stderr, "unknown subcommand: %s\n", cmd)
@@ -212,7 +234,7 @@ type Context struct {
 // block read-only operations.
 func needsPublic(cmd string) bool {
 	switch cmd {
-	case "add", "delete", "publish", "verify":
+	case cmdAdd, cmdDelete, cmdPublish, cmdVerify:
 		return true
 	default:
 		return false
@@ -226,7 +248,7 @@ func needsPublic(cmd string) bool {
 // silently passing list/search/verify and only blowing up on publish.
 func needsConfig(cmd string) bool {
 	switch cmd {
-	case "init", "info":
+	case cmdInit, cmdInfo:
 		return false
 	default:
 		return true
@@ -348,7 +370,7 @@ func resolveRepoRoot(flagRepo, cmd string) (string, error) {
 			// a missing $HOME (minimal containers / CI sandboxes without a
 			// resolvable home) must not block either. The init handler
 			// surfaces its own error if no positional path was given.
-			if cmd == "info" || cmd == "init" {
+			if cmd == cmdInfo || cmd == cmdInit {
 				return "", nil
 			}
 			return "", err
@@ -359,7 +381,7 @@ func resolveRepoRoot(flagRepo, cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolving repo root %q: %w", root, err)
 	}
-	if cmd == "init" || cmd == "info" {
+	if cmd == cmdInit || cmd == cmdInfo {
 		return abs, nil
 	}
 	if _, err := os.Stat(filepath.Join(abs, dbFilename)); err != nil {
