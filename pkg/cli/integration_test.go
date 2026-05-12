@@ -50,6 +50,7 @@ func TestIntegration_InitAddPublish(t *testing.T) {
 	// init does not consume --public (and would not need it), but Run accepts
 	// the flag at the global level regardless, so we can keep one runCmd helper.
 	runCmd("init")
+	appendTestDistros(t, tmpState, "debian", "ubuntu")
 	runCmd("add", "--distro", "debian", "--suite", "bookworm", deb)
 	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
 
@@ -124,6 +125,7 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	}
 
 	runCmd("init")
+	appendTestDistros(t, tmpState, "debian", "ubuntu")
 
 	distros := []string{"debian", "ubuntu"}
 	suitesByDistro := map[string][]string{
@@ -259,6 +261,7 @@ func TestIntegration_CrossDistroSameSuite(t *testing.T) {
 	}
 
 	runCmd("init")
+	appendTestDistros(t, tmpState, "debian", "ubuntu")
 	rewriteConfigPublicDir(t, tmpState, tmpPublic)
 
 	debianDeb := buildTestDeb(t, debDir, "alpha", "1.0", "amd64")

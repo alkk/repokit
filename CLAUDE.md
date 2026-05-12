@@ -46,7 +46,10 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
   the file is missing). Loaded and validated once in `Run()` for every command
   except `init` (creates the file) and `info` (never reads state) — see
   `needsConfig`. Subcommand handlers should read `c.Config` instead of
-  re-calling `loadConfig(c.Root)`.
+  re-calling `loadConfig(c.Root)`. `Config.Distros` is the authoritative list
+  of managed distros; `add`, `delete`, `publish`, and `verify` reject
+  `--distro` values not in this list via `requireConfiguredDistro` in
+  `root.go`.
 
 Flow of a typical write command (`add`, `delete`, `publish`):
 
@@ -112,3 +115,6 @@ verify.
 - The default state dir is `~/.repokit/` for **every** subcommand including
   `init`. Tests must override `defaultStateDir` (package-level var in
   `root.go`) rather than poke `$HOME`.
+- Managed distros are explicit in `config.yaml`. The public dir may contain
+  unrelated top-level directories — repokit never walks them. Adding a new
+  distro requires a config edit before `add` will accept it.

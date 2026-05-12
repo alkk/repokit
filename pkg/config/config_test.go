@@ -168,7 +168,7 @@ func TestLoad(t *testing.T) {
 			t.Run(field, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), field+".yaml")
 				body := fmt.Sprintf(
-					"signing_key: KEY\nsuites:\n  debian/bookworm:\n    %s: \"x\\nInjected: y\"\n",
+					"signing_key: KEY\ndistros:\n  - debian\nsuites:\n  debian/bookworm:\n    %s: \"x\\nInjected: y\"\n",
 					field,
 				)
 				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -180,6 +180,91 @@ func TestLoad(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("distros entries are parsed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "distros.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - debian\n  - ubuntu\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"debian", "ubuntu"}, c.Distros)
+	})
+
+	t.Run("empty distros is accepted at load time", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "nodistros.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("signing_key: KEY\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Empty(t, c.Distros)
+	})
+
+	t.Run("duplicate distros entry is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "dup.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - debian\n  - debian\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate")
+		assert.Contains(t, err.Error(), "debian")
+	})
+
+	t.Run("invalid distros entry is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bad.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - \"deb ian\"\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "deb ian")
+	})
+
+	t.Run("suite distro not in distros list is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "mismatch.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - debian\nsuites:\n  ubuntu/jammy:\n    origin: x\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ubuntu/jammy")
+		assert.Contains(t, err.Error(), "ubuntu")
+	})
+}
+
+func TestValidateDistroName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"plain lowercase", "debian", false},
+		{"with hyphen", "ubuntu-22", false},
+		{"alphanumeric", "epel8", false},
+		{"single char", "a", false},
+		{"uppercase allowed", "Debian", false},
+		{"leading hyphen", "-debian", true},
+		{"empty", "", true},
+		{"contains space", "de bian", true},
+		{"contains slash", "debian/sub", true},
+		{"dots", "..", true},
+		{"non-ascii letter", "débian", true},
+		{"control char", "deb\x00ian", true},
+		{"underscore", "deb_ian", true},
+		{"newline", "deb\nian", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDistroName(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestSuiteOrDefault(t *testing.T) {

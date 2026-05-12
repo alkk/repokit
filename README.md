@@ -83,8 +83,9 @@ sudo mkdir -p /srv/apt
 sudo chown "$USER" /srv/apt
 
 # 3. Edit ~/.repokit/config.yaml — set signing_key to a fingerprint your gpg
-#    agent has the secret key for, and set public_dir to the directory above
-#    (or pass --public /srv/apt on every command, or export REPOKIT_PUBLIC).
+#    agent has the secret key for, set public_dir to the directory above
+#    (or pass --public /srv/apt on every command, or export REPOKIT_PUBLIC),
+#    and list the distros you intend to manage under distros:.
 
 # 4. Stage some packages
 repokit add --distro debian --suite bookworm \
@@ -136,6 +137,26 @@ sudo apt-get install hello
 ```
 
 The tree is fully static — any HTTPS server (S3, nginx, GitHub Pages) will do.
+
+## Configuration
+
+The state-dir `config.yaml` lists the distros repokit is allowed to manage.
+Every `--distro` argument to `add`, `delete`, `publish`, and `verify` must
+appear in this list; an unconfigured value is rejected before any pool or
+dists write. The public dir may hold unrelated top-level directories — those
+are never walked.
+
+```yaml
+distros:
+  - debian
+  - ubuntu
+
+signing_key: "DEADBEEF1234..."
+public_dir: "/srv/apt"
+```
+
+See [docs/usage.md](docs/usage.md) for the full config schema including
+per-suite `Release` header overrides.
 
 ## Documentation
 

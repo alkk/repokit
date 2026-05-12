@@ -1,4 +1,6 @@
 signing_key: "DEADBEEF1234"
+distros:
+  - debian
 suites:
   debian/bookworm:
     origin: "MyRepo"

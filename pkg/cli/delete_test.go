@@ -366,6 +366,30 @@ func TestDeleteRejectsUnsafeComponentArch(t *testing.T) {
 	}
 }
 
+// TestDeleteRejectsUnconfiguredDistro asserts that a --distro value not in
+// config.distros aborts delete with ExitError before any DB row is touched.
+// The fixture distro list is debian/ubuntu (from initRepoForTest); "raspbian"
+// is deliberately absent.
+func TestDeleteRejectsUnconfiguredDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	code, _, stderr := runDelete(t, tmpState, tmpPublic,
+		"--distro", "raspbian", "--suite", "bookworm",
+		"--name", "hello-gz", "--version", "1.0",
+	)
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr, `"raspbian"`,
+		"error should name the offending --distro value")
+	assert.Contains(t, stderr, "config.distros",
+		"error should mention the config field the operator must edit")
+
+	assert.Equal(t, 1, rowCount(t, tmpState), "no DB row must be removed")
+	assert.Equal(t, 1, poolFileCount(t, tmpPublic), "no pool file must be removed")
+}
+
 // TestDeletePoolUnlinksTargetPublicDir is a focused regression check that the
 // pool unlink path uses ctx.PublicDir, not ctx.Root: the state dir must be
 // untouched by the delete, and the file under tmpPublic must be gone.

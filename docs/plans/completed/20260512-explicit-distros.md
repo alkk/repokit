@@ -211,15 +211,15 @@ suites:
 - Modify: `pkg/config/config.go`
 - Modify: `pkg/config/config_test.go`
 
-- [ ] add `Distros []string` field to `Config` struct in `pkg/config/config.go` with `yaml:"distros"` tag
-- [ ] add `validateDistroName(name string) error` helper using positive allowlist `[a-zA-Z0-9-]`, reject empty
-- [ ] in `Load`, after the existing `Suites` validation loop, iterate `c.Distros`: call `validateDistroName`, track seen names, error on duplicate
-- [ ] in `Load`, after distro validation, iterate `c.Suites` keys and reject any whose distro half (from `splitSuiteKey`) is not in the validated distro set
-- [ ] add table-driven tests for `validateDistroName` (accept: `debian`, `ubuntu-22`, `epel8`, `a`; reject: empty, `de bian`, `debian/sub`, `..`, leading `-`, `débian`, control chars)
-- [ ] add test: `Load` rejects duplicate `distros:` entries
-- [ ] add test: `Load` rejects `suites:` key whose distro half is not in `distros:`
-- [ ] add test: `Load` accepts a config with empty `distros:` (Load does not enforce non-emptiness; subcommands do)
-- [ ] run `make test ./pkg/config/...` — must pass before next task
+- [x] add `Distros []string` field to `Config` struct in `pkg/config/config.go` with `yaml:"distros"` tag
+- [x] add `validateDistroName(name string) error` helper using positive allowlist `[a-zA-Z0-9-]`, reject empty
+- [x] in `Load`, after the existing `Suites` validation loop, iterate `c.Distros`: call `validateDistroName`, track seen names, error on duplicate
+- [x] in `Load`, after distro validation, iterate `c.Suites` keys and reject any whose distro half (from `splitSuiteKey`) is not in the validated distro set
+- [x] add table-driven tests for `validateDistroName` (accept: `debian`, `ubuntu-22`, `epel8`, `a`; reject: empty, `de bian`, `debian/sub`, `..`, leading `-`, `débian`, control chars)
+- [x] add test: `Load` rejects duplicate `distros:` entries
+- [x] add test: `Load` rejects `suites:` key whose distro half is not in `distros:`
+- [x] add test: `Load` accepts a config with empty `distros:` (Load does not enforce non-emptiness; subcommands do)
+- [x] run `make test ./pkg/config/...` — must pass before next task
 
 ### Task 2: Add `requireConfiguredDistro` helper
 
@@ -227,11 +227,11 @@ suites:
 - Modify: `pkg/cli/root.go`
 - Modify: `pkg/cli/root_test.go`
 
-- [ ] add `requireConfiguredDistro(cfg *config.Config, distro string) error` in `pkg/cli/root.go`
-- [ ] error message includes the offending value and the configured list so an operator can self-diagnose
-- [ ] add table-driven test: empty distro rejected, configured distro accepted, unconfigured distro rejected (error mentions the value and the list)
-- [ ] add test: nil-config / empty-distros case returns the unconfigured-distro error (rather than panicking)
-- [ ] run `make test ./pkg/cli/...` — must pass before next task
+- [x] add `requireConfiguredDistro(cfg *config.Config, distro string) error` in `pkg/cli/root.go`
+- [x] error message includes the offending value and the configured list so an operator can self-diagnose
+- [x] add table-driven test: empty distro rejected, configured distro accepted, unconfigured distro rejected (error mentions the value and the list)
+- [x] add test: nil-config / empty-distros case returns the unconfigured-distro error (rather than panicking)
+- [x] run `make test ./pkg/cli/...` — must pass before next task
 
 ### Task 3: Wire `requireConfiguredDistro` into `add` and `delete`
 
@@ -241,12 +241,12 @@ suites:
 - Modify: `pkg/cli/add_test.go`
 - Modify: `pkg/cli/delete_test.go`
 
-- [ ] in `add`, call `requireConfiguredDistro(c.Config, cmd.Distro)` immediately after the existing `requireScopeName(fieldDistro, cmd.Distro)` call
-- [ ] in `delete`, same pattern
-- [ ] add `add_test.go` case: unconfigured `--distro` returns ExitError, no pool file written, no DB row inserted
-- [ ] add `delete_test.go` case: unconfigured `--distro` returns ExitError, no DB rows touched
-- [ ] update any existing `add`/`delete` tests whose fixture config lacks `distros:` — add the field listing the distros the test uses
-- [ ] run `make test ./pkg/cli/...` — must pass before next task
+- [x] in `add`, call `requireConfiguredDistro(c.Config, cmd.Distro)` immediately after the existing `requireScopeName(fieldDistro, cmd.Distro)` call
+- [x] in `delete`, same pattern
+- [x] add `add_test.go` case: unconfigured `--distro` returns ExitError, no pool file written, no DB row inserted
+- [x] add `delete_test.go` case: unconfigured `--distro` returns ExitError, no DB rows touched
+- [x] update any existing `add`/`delete` tests whose fixture config lacks `distros:` — add the field listing the distros the test uses (handled centrally in `initRepoForTest` via a new `appendTestDistros` helper, also wired into the integration-test `runCmd("init")` callsites so the package-level test run keeps passing)
+- [x] run `make test ./pkg/cli/...` — must pass before next task
 
 ### Task 4: Wire `requireConfiguredDistro` into `publish` and constrain disk discovery
 
@@ -254,15 +254,15 @@ suites:
 - Modify: `pkg/cli/publish.go`
 - Modify: `pkg/cli/publish_test.go`
 
-- [ ] in `publish`, when `cmd.Distro != ""`, call `requireConfiguredDistro` after the existing scope-name check
-- [ ] change `filesystemScopes(publicDir)` signature to `filesystemScopes(publicDir string, distros []string)`; iterate `distros` instead of reading top-level `<publicDir>` entries; for each, stat `<publicDir>/<distro>/dists/` and walk its suites as before (drop the `validateScopeName(fieldDistro, ...)` gate — entries from `cfg.Distros` are pre-validated)
-- [ ] thread `cfg.Distros` into `allScopes` so it can pass them to `filesystemScopes` (the simplest path: change `allScopes(ctx, publicDir, r)` → `allScopes(ctx, publicDir, distros, r)` and update its single caller in `resolveScopes`)
-- [ ] in `allScopes`, after the union, drop any scope whose distro is not in `cfg.Distros` (belt-and-braces against legacy DB rows); print a warning to `c.Stderr` per dropped scope so operators notice the inconsistency
-- [ ] add `publish_test.go` case: unconfigured `--distro` returns ExitError, no `<suite>.new` staging dir is created
-- [ ] add `publish_test.go` case: a `<publicDir>/raspbian/dists/bullseye/Release` exists on disk with `raspbian` **not** in `cfg.Distros`; no-arg `publish` does **not** touch the raspbian tree (the Release file is unchanged afterwards)
-- [ ] add `publish_test.go` case: a DB row exists for an unconfigured distro; no-arg `publish` skips it and writes a warning line to stderr
-- [ ] update fixture configs in existing `publish_test.go` cases to include `distros:`
-- [ ] run `make test ./pkg/cli/...` — must pass before next task
+- [x] in `publish`, when `cmd.Distro != ""`, call `requireConfiguredDistro` after the existing scope-name check
+- [x] change `filesystemScopes(publicDir)` signature to `filesystemScopes(publicDir string, distros []string)`; iterate `distros` instead of reading top-level `<publicDir>` entries; for each, stat `<publicDir>/<distro>/dists/` and walk its suites as before (drop the `validateScopeName(fieldDistro, ...)` gate — entries from `cfg.Distros` are pre-validated)
+- [x] thread `cfg.Distros` into `allScopes` so it can pass them to `filesystemScopes` (the simplest path: change `allScopes(ctx, publicDir, r)` → `allScopes(ctx, publicDir, distros, r)` and update its single caller in `resolveScopes`)
+- [x] in `allScopes`, after the union, drop any scope whose distro is not in `cfg.Distros` (belt-and-braces against legacy DB rows); print a warning to `c.Stderr` per dropped scope so operators notice the inconsistency
+- [x] add `publish_test.go` case: unconfigured `--distro` returns ExitError, no `<suite>.new` staging dir is created
+- [x] add `publish_test.go` case: a `<publicDir>/raspbian/dists/bullseye/Release` exists on disk with `raspbian` **not** in `cfg.Distros`; no-arg `publish` does **not** touch the raspbian tree (the Release file is unchanged afterwards)
+- [x] add `publish_test.go` case: a DB row exists for an unconfigured distro; no-arg `publish` skips it and writes a warning line to stderr
+- [x] update fixture configs in existing `publish_test.go` cases to include `distros:` (handled via `initRepoForTest`; `TestPublishRequiresSigningKeyWithoutNoSign` rewrites the seed to drop signing_key but keeps a distros: block)
+- [x] run `make test ./pkg/cli/...` — must pass before next task
 
 ### Task 5: Replace `unionWithDiskDistros` in `verify` with `cfg.Distros`, delete dead `repo.EnumerateDistros`
 
@@ -272,17 +272,17 @@ suites:
 - Modify: `pkg/repo/queries.go`
 - Modify: `pkg/repo/queries_test.go`
 
-- [ ] in `verify`, when `cmd.Distro != ""`, call `requireConfiguredDistro` after the existing scope-name check
-- [ ] remove the `enumerate func(context.Context) ([]string, error)` parameter from `scanOrphansForScope`; replace the unscoped branch with iteration over `cfg.Distros` and per-distro `scanOrphans` calls
-- [ ] remove the dead closure at `pkg/cli/verify.go:151-153` in `verifyAndGC` (the one that wraps `r.EnumerateDistrosConn`); update both `verifyAndGC` and `verifyOnly` callsites of `scanOrphansForScope` to match the new signature
-- [ ] **delete** `unionWithDiskDistros` from `pkg/cli/verify.go` (and any helpers with no remaining caller — `poolDirName` stays because `scopePoolDir` uses it)
-- [ ] verify `EnumerateDistros` / `EnumerateDistrosConn` have no other callers: `grep -rn EnumerateDistros /Users/alk/Development/repokit/pkg/` — confirmed only `pkg/repo/queries_test.go` references them after the verify changes
-- [ ] **delete** `EnumerateDistros` and `EnumerateDistrosConn` from `pkg/repo/queries.go`; delete their tests from `pkg/repo/queries_test.go`
-- [ ] add `verify_test.go` regression test (the bug being fixed): place `<publicDir>/raspbian/pool/foo.deb` on disk with `raspbian` **not** in `cfg.Distros`; run `verify --gc` (unscoped); assert the file is **not** deleted and `raspbian` is not reported as orphan
-- [ ] add `verify_test.go` case: unconfigured `--distro` returns ExitError without walking any pool (assert by leaving a known-orphan file in the configured-distro tree and verifying it is also untouched, since the run aborted before the walk)
-- [ ] delete or update existing tests that exercised the disk-discovery branch of `unionWithDiskDistros`
-- [ ] update fixture configs in existing `verify_test.go` cases to include `distros:`
-- [ ] run `make test ./pkg/cli/... ./pkg/repo/...` — must pass before next task
+- [x] in `verify`, when `cmd.Distro != ""`, call `requireConfiguredDistro` after the existing scope-name check
+- [x] remove the `enumerate func(context.Context) ([]string, error)` parameter from `scanOrphansForScope`; replace the unscoped branch with iteration over `cfg.Distros` and per-distro `scanOrphans` calls
+- [x] remove the dead closure at `pkg/cli/verify.go:151-153` in `verifyAndGC` (the one that wraps `r.EnumerateDistrosConn`); update both `verifyAndGC` and `verifyOnly` callsites of `scanOrphansForScope` to match the new signature
+- [x] **delete** `unionWithDiskDistros` from `pkg/cli/verify.go` (and any helpers with no remaining caller — `poolDirName` stays because `scopePoolDir` uses it)
+- [x] verify `EnumerateDistros` / `EnumerateDistrosConn` have no other callers: `grep -rn EnumerateDistros /Users/alk/Development/repokit/pkg/` — confirmed only `pkg/repo/queries_test.go` references them after the verify changes
+- [x] **delete** `EnumerateDistros` and `EnumerateDistrosConn` from `pkg/repo/queries.go`; delete their tests from `pkg/repo/queries_test.go`
+- [x] add `verify_test.go` regression test (the bug being fixed): place `<publicDir>/raspbian/pool/foo.deb` on disk with `raspbian` **not** in `cfg.Distros`; run `verify --gc` (unscoped); assert the file is **not** deleted and `raspbian` is not reported as orphan
+- [x] add `verify_test.go` case: unconfigured `--distro` returns ExitError without walking any pool (assert by leaving a known-orphan file in the configured-distro tree and verifying it is also untouched, since the run aborted before the walk)
+- [x] delete or update existing tests that exercised the disk-discovery branch of `unionWithDiskDistros` (kept `TestVerifyUnscopedFindsOrphansInDBEmptyDistro`, which still exercises the no-DB-rows path via a configured distro; comment updated to reflect the new semantics)
+- [x] update fixture configs in existing `verify_test.go` cases to include `distros:` (already handled centrally via `initRepoForTest` → `appendTestDistros` from Task 3)
+- [x] run `make test ./pkg/cli/... ./pkg/repo/...` — must pass before next task
 
 ### Task 6: Update `init` seed config template
 
@@ -290,12 +290,12 @@ suites:
 - Modify: `pkg/cli/init.go`
 - Modify: `pkg/cli/init_test.go`
 
-- [ ] update the seed YAML written by `init` to include a `distros:` block at the top with `debian` and `ubuntu` example entries, plus a header comment instructing the operator to edit before first use
-- [ ] preserve the existing `signing_key: REPLACE_ME` and `public_dir: REPLACE_ME` placeholders
-- [ ] add test: the seed config written by `init` parses cleanly via `config.Load`
-- [ ] add test: parsed seed config has a non-empty `Distros` slice
-- [ ] add test: parsed seed config's `Distros` entries all pass `validateDistroName`
-- [ ] run `make test ./pkg/cli/...` — must pass before next task
+- [x] update the seed YAML written by `init` to include a `distros:` block at the top with `debian` and `ubuntu` example entries, plus a header comment instructing the operator to edit before first use
+- [x] preserve the existing `signing_key: REPLACE_ME` and `public_dir: REPLACE_ME` placeholders
+- [x] add test: the seed config written by `init` parses cleanly via `config.Load` (covered by existing `TestInitConfigTemplateRoundTrip`, which now exercises distros validation as a side effect)
+- [x] add test: parsed seed config has a non-empty `Distros` slice (new `TestConfigTemplateHasDistros`)
+- [x] add test: parsed seed config's `Distros` entries all pass `validateDistroName` (asserted via `[a-zA-Z0-9-]+` regex in `TestConfigTemplateHasDistros`)
+- [x] run `make test ./pkg/cli/...` — must pass before next task (also updated `appendTestDistros` to strip pre-existing distros: blocks so the new template doesn't clash with test fixtures)
 
 ### Task 7: Update integration test fixtures
 
@@ -303,17 +303,17 @@ suites:
 - Modify: `pkg/cli/integration_test.go`
 - Modify: `pkg/cli/integration_realpkg_test.go`
 
-- [ ] grep for `signing_key:` in both files to find fixture configs; add a `distros:` block listing the distros each fixture exercises
-- [ ] no behavioral changes — these tests must continue to pass end-to-end (`init` → `add` → `publish` → `verify`)
-- [ ] run `make test ./pkg/cli/...` — full integration suite must pass before next task
+- [x] grep for `signing_key:` in both files to find fixture configs; add a `distros:` block listing the distros each fixture exercises (no inline fixture configs — both integration tests use `initRepoForTest` + `appendTestDistros` from Task 3, so the `distros:` block is already wired in centrally)
+- [x] no behavioral changes — these tests must continue to pass end-to-end (`init` → `add` → `publish` → `verify`)
+- [x] run `make test ./pkg/cli/...` — full integration suite must pass before next task
 
 ### Task 8: Verify acceptance criteria
 
-- [ ] verify all Overview requirements are implemented: `distros:` field exists, all write commands gated, `unionWithDiskDistros` removed, init template updated
-- [ ] verify the regression case manually: build the binary (`make build`), create a temp public dir with a bogus `raspbian/pool/test.deb`, run `repokit verify --gc` with a config listing only `debian`/`ubuntu`, confirm `raspbian/pool/test.deb` still exists afterwards
-- [ ] run `make test` — full test suite passes
-- [ ] run `make race` — race sweep passes
-- [ ] run `make lint` — no new lint findings
+- [x] verify all Overview requirements are implemented: `distros:` field exists, all write commands gated, `unionWithDiskDistros` removed, init template updated
+- [x] verify the regression case manually: built the binary, created a temp public dir with bogus `raspbian/pool/test.deb`, ran `repokit verify --gc` with config listing only `debian`/`ubuntu`, file remained intact (`verify: ok`, file present afterwards)
+- [x] run `make test` — full test suite passes
+- [x] run `make race` — race sweep passes
+- [x] run `make lint` — no new lint findings (fixed two preexisting findings introduced by this plan: `for i := 0; i < len(name)` → `for i := range len(name)` in `validateDistroName`; `len(rewritten) > 0` → `rewritten != ""` in `appendTestDistros`)
 
 ### Task 9: Update documentation
 
@@ -321,10 +321,10 @@ suites:
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] in `CLAUDE.md`, under Architecture / `Context.Config`, add a sentence: `Distros` is the authoritative list of managed distros; subcommands reject `--distro` values not in this list.
-- [ ] in `CLAUDE.md` Gotchas, remove any wording implying on-disk distro discovery; add: "Managed distros are explicit in `config.yaml`. The public dir may contain unrelated top-level directories — repokit never walks them. Adding a new distro requires a config edit before `add` will accept it."
-- [ ] in `README.md`, add a one- or two-paragraph note in the config section describing the `distros:` field with a YAML example
-- [ ] move this plan to `docs/plans/completed/`: `mkdir -p docs/plans/completed && git mv docs/plans/20260512-explicit-distros.md docs/plans/completed/`
+- [x] in `CLAUDE.md`, under Architecture / `Context.Config`, add a sentence: `Distros` is the authoritative list of managed distros; subcommands reject `--distro` values not in this list.
+- [x] in `CLAUDE.md` Gotchas, remove any wording implying on-disk distro discovery; add: "Managed distros are explicit in `config.yaml`. The public dir may contain unrelated top-level directories — repokit never walks them. Adding a new distro requires a config edit before `add` will accept it."
+- [x] in `README.md`, add a one- or two-paragraph note in the config section describing the `distros:` field with a YAML example (also brought `docs/usage.md` in line: stripped the disk-discovery wording from the `publish` section and added `distros:` to the config-schema table and example)
+- [x] move this plan to `docs/plans/completed/`: `mkdir -p docs/plans/completed && git mv docs/plans/20260512-explicit-distros.md docs/plans/completed/`
 
 ## Post-Completion
 

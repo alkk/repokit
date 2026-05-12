@@ -14,6 +14,7 @@ import (
 type Config struct {
 	SigningKey string                 `yaml:"signing_key"`
 	PublicDir  string                 `yaml:"public_dir"`
+	Distros    []string               `yaml:"distros"`
 	Suites     map[string]SuiteConfig `yaml:"suites"`
 }
 
@@ -46,10 +47,23 @@ func Load(path string) (*Config, error) {
 			}
 		}
 	}
+	distros := make(map[string]struct{}, len(c.Distros))
+	for _, d := range c.Distros {
+		if err := validateDistroName(d); err != nil {
+			return nil, err
+		}
+		if _, dup := distros[d]; dup {
+			return nil, fmt.Errorf("config: duplicate distros entry %q", d)
+		}
+		distros[d] = struct{}{}
+	}
 	for key, suite := range c.Suites {
 		distro, name, ok := splitSuiteKey(key)
 		if !ok {
 			return nil, fmt.Errorf("config: suite key %q must be in <distro>/<suite> form", key)
+		}
+		if _, found := distros[distro]; !found {
+			return nil, fmt.Errorf("config: suite %q references distro %q not in distros", key, distro)
 		}
 		if err := validateSuiteHeaders(key, suite); err != nil {
 			return nil, err
@@ -57,6 +71,31 @@ func Load(path string) (*Config, error) {
 		c.Suites[key] = applyDefaults(suite, distro, name)
 	}
 	return c, nil
+}
+
+// validateDistroName enforces a strict positive allowlist for entries in the
+// distros: config list. Distro names are user-facing scope identifiers and end
+// up as path components under <publicDir>/<distro>/...; keeping the alphabet
+// narrow (ASCII letters in either case, digits, ASCII hyphen) eliminates the
+// need for path-segment escaping or Release-header sanitization downstream.
+func validateDistroName(name string) error {
+	if name == "" {
+		return errors.New("config: distros entry must not be empty")
+	}
+	if name[0] == '-' {
+		return fmt.Errorf("config: distros entry %q must not start with '-'", name)
+	}
+	for i := range len(name) {
+		c := name[i]
+		ok := (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '-'
+		if !ok {
+			return fmt.Errorf("config: distros entry %q: only [a-zA-Z0-9-] allowed", name)
+		}
+	}
+	return nil
 }
 
 // validateSigningKey rejects signing_key values that would be unsafe to pass

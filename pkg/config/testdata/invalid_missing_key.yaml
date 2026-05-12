@@ -1,3 +1,5 @@
+distros:
+  - debian
 suites:
   debian/bookworm:
     origin: "MyRepo"

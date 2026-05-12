@@ -192,17 +192,15 @@ repokit publish [--distro <d> --suite <s>] [--no-sign]
 | `--suite <s>` | — | target suite (must be paired with `--distro`) |
 | `--no-sign` | off | skip signing — produce stub `InRelease`/`Release.gpg` |
 
-Both scope flags omitted means publish every suite known to the repository —
-every suite with at least one row in the packages table, plus every suite that
-already has a live `<distro>/dists/<suite>/Release` on disk. The filesystem
-half ensures that a suite emptied by `delete` is republished with empty
-indexes so apt clients stop seeing the stale `Packages`/`Release` files. Top-
-level entries under the public dir that aren't directories or whose names
-fail distro-name validation, and directories that don't contain a `dists/`
-subdirectory, are skipped — so unrelated user-created top-level files or
-directories don't trigger spurious distros.
-Staging siblings (`<suite>.new`, `<suite>.old`) and directories without a
-`Release` file under `<distro>/dists/` are likewise skipped.
+Both scope flags omitted means publish every suite known to the repository,
+constrained to the distros listed in `config.yaml`'s `distros:` field — every
+suite with at least one row in the packages table for a configured distro,
+plus every suite that already has a live `<configured-distro>/dists/<suite>/Release`
+on disk. The filesystem half ensures that a suite emptied by `delete` is
+republished with empty indexes so apt clients stop seeing the stale
+`Packages`/`Release` files. Unrelated top-level directories under the public
+dir are never walked. Staging siblings (`<suite>.new`, `<suite>.old`) and
+directories without a `Release` file under `<distro>/dists/` are skipped.
 
 Specifying one scope flag without the other is a usage error.
 
@@ -277,6 +275,10 @@ read by every command that resolves a public dir or signs `Release`. A
 starter template is written by `init`.
 
 ```yaml
+distros:                          # managed distros — every --distro flag must
+  - debian                        # appear here; unconfigured values are rejected
+  - ubuntu
+
 signing_key: "DEADBEEF1234..."   # gpg key id or fingerprint (required for signed publish)
 public_dir: "/srv/apt"           # absolute path the webserver docroot points at
 
@@ -294,6 +296,7 @@ suites:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `distros` | list of strings | yes for add/delete/publish/verify | `[]` | distros repokit is allowed to manage; entries must match `[a-zA-Z0-9-]+`, no duplicates, and every `suites:` key's distro half must appear here |
 | `signing_key` | string | yes (unless `--no-sign`) | — | gpg key id or fingerprint that signs `Release` |
 | `public_dir` | string | yes for add/delete/publish/verify (unless `--public` / `$REPOKIT_PUBLIC` is set) | — | absolute path to the public-facing tree |
 | `suites` | map | no | `{}` | per-suite Release header overrides keyed by `<distro>/<suite>` |

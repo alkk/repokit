@@ -322,11 +322,11 @@ func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
 }
 
 // TestVerifyUnscopedFindsOrphansInDBEmptyDistro guards against the
-// regression where unscoped verify enumerates only DB-known distros and
-// silently misses orphan files in a distro that has no rows at all (e.g.
-// after a crashed add or a delete pass that removed the last row but
-// failed to clean up the pool file). The disk side of the union must
-// still pull the distro into the orphan walk.
+// regression where unscoped verify silently misses orphan files in a
+// configured distro that has no rows at all (e.g. after a crashed add or
+// a delete pass that removed the last row but failed to clean up the
+// pool file). Every distro listed in config.distros is walked even when
+// the DB has no rows for it.
 func TestVerifyUnscopedFindsOrphansInDBEmptyDistro(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -388,4 +388,112 @@ func TestVerifyDoesNotTouchStateDir(t *testing.T) {
 	statePost, err := os.ReadDir(tmpState)
 	require.NoError(t, err)
 	assert.Len(t, statePost, len(statePre), "state dir top-level entry count must not change")
+}
+
+// TestVerifyGCLeavesUnconfiguredDistroAlone is the central regression test
+// for the explicit-distros bug fix: a public dir holding an unrelated
+// top-level tree (e.g. raspbian/pool/... managed by another tool) must be
+// invisible to verify --gc when raspbian is not in config.distros.
+// Before the fix, the disk-discovery branch of unionWithDiskDistros would
+// walk the tree, classify every file as an orphan, and delete it.
+func TestVerifyGCLeavesUnconfiguredDistroAlone(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	foreign := filepath.Join(tmpPublic, "raspbian", "pool", "bullseye", "main", "f", "foreign",
+		"foreign_1.0_armhf.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(foreign), 0o755))
+	require.NoError(t, os.WriteFile(foreign, []byte("not repokit's"), 0o644))
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "verify: ok")
+	assert.NotContains(t, stdout, "raspbian", "verify must never walk unconfigured trees")
+
+	assert.FileExists(t, foreign, "verify --gc must not touch unconfigured distros under publicDir")
+	body, err := os.ReadFile(foreign)
+	require.NoError(t, err)
+	assert.Equal(t, "not repokit's", string(body), "file contents must be untouched")
+}
+
+// TestVerifyUnconfiguredDistroFlagAborts confirms a --distro value that
+// is not in config.distros aborts the run before any pool walk happens.
+// We plant a known-orphan inside a configured distro: if the run had
+// proceeded past the gate, --gc would have deleted it; the assertion that
+// the file survives proves the early abort.
+func TestVerifyUnconfiguredDistroFlagAborts(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
+		"ghost_1.0_amd64.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
+	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
+
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc", "--distro", "raspbian")
+	require.Equal(t, ExitError, code)
+	assert.Contains(t, stderr, "raspbian")
+	assert.Contains(t, stderr, "config.distros")
+	assert.FileExists(t, orphan, "verify must abort before any pool walk when --distro is unconfigured")
+}
+
+// TestVerifyUnscopedRejectsEmptyDistros guards the hard-cutover promise:
+// an existing repo whose config.yaml has no distros: block (or an empty
+// list) must fail with a clear error when run unscoped, not silently
+// succeed with "verify: ok". The scoped --distro path is already covered
+// by requireConfiguredDistro.
+func TestVerifyUnscopedRejectsEmptyDistros(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	body := "signing_key: ABC123\npublic_dir: \"" + tmpPublic + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpState, configFilename), []byte(body), 0o600))
+
+	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
+		"ghost_1.0_amd64.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
+	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
+
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, ExitError, code)
+	assert.Contains(t, stderr, "config.distros is empty")
+	assert.FileExists(t, orphan, "verify --gc must abort before any pool walk when config.distros is empty")
+}
+
+// TestVerifyUnscopedSkipsRowsForUnconfiguredDistro guards the verify
+// counterpart to publish's belt-and-braces filter: if a DB row exists for
+// a distro that was later removed from config.distros, verify must skip
+// the row (with a stderr warning) rather than open files under an
+// unconfigured tree.
+func TestVerifyUnscopedSkipsRowsForUnconfiguredDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "raspbian", "bullseye", "armhf", "beta", "1.0"))
+
+	raspbianPool := filepath.Join(tmpPublic, "raspbian", "pool", "bullseye", "main", "b", "beta",
+		"beta_1.0_armhf.deb")
+	require.FileExists(t, raspbianPool)
+	bodyBefore, err := os.ReadFile(raspbianPool)
+	require.NoError(t, err)
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "verify: ok")
+	assert.Contains(t, stderr, `"raspbian"`,
+		"stderr must warn that the unconfigured distro was skipped")
+	assert.Contains(t, stderr, "config.distros",
+		"stderr warning must point at the config field")
+
+	assert.FileExists(t, raspbianPool,
+		"verify must not touch pool files for distros missing from config.distros")
+	bodyAfter, err := os.ReadFile(raspbianPool)
+	require.NoError(t, err)
+	assert.Equal(t, bodyBefore, bodyAfter, "raspbian pool file contents must be unchanged")
 }

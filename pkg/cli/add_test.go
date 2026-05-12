@@ -17,12 +17,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// initRepoForTest creates a fresh repo at root using the init subcommand.
+// initRepoForTest creates a fresh repo at root using the init subcommand and
+// appends a baseline `distros:` block (debian, ubuntu) to the seed config so
+// write subcommands gated by requireConfiguredDistro accept the values the
+// existing test suite uses.
 func initRepoForTest(t *testing.T, root string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--repo", root, "init"}, &stdout, &stderr, "test-rev")
 	require.Equal(t, ExitOK, code, "init failed: %s", stderr.String())
+	appendTestDistros(t, root, "debian", "ubuntu")
+}
+
+// appendTestDistros rewrites the seed config's `distros:` block with the given
+// names so write subcommands accept exactly the values the test wants. Any
+// existing `distros:` block (from the init template) is stripped first to keep
+// the YAML free of duplicate keys.
+func appendTestDistros(t *testing.T, root string, distros ...string) {
+	t.Helper()
+	cfgPath := filepath.Join(root, "config.yaml")
+	body, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	lines := strings.Split(string(body), "\n")
+	out := make([]string, 0, len(lines))
+	skipping := false
+	for _, line := range lines {
+		if skipping {
+			if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+				continue
+			}
+			skipping = false
+		}
+		if strings.HasPrefix(line, "distros:") {
+			skipping = true
+			continue
+		}
+		out = append(out, line)
+	}
+	rewritten := strings.Join(out, "\n")
+
+	var b strings.Builder
+	b.WriteString(rewritten)
+	if rewritten != "" && rewritten[len(rewritten)-1] != '\n' {
+		b.WriteString("\n")
+	}
+	b.WriteString("distros:\n")
+	for _, d := range distros {
+		b.WriteString("  - ")
+		b.WriteString(d)
+		b.WriteString("\n")
+	}
+	require.NoError(t, os.WriteFile(cfgPath, []byte(b.String()), 0o600))
 }
 
 // fixtureDeb returns the absolute path to a testdata .deb fixture sitting in
@@ -527,6 +573,32 @@ func TestAddPoolWritesGoToPublicDir(t *testing.T) {
 		assert.NotEqual(t, "debian", e.Name(),
 			"state dir must not gain a per-distro tree")
 	}
+}
+
+// TestAddRejectsUnconfiguredDistro asserts that a --distro value not present
+// in config.distros is rejected by requireConfiguredDistro before any pool or
+// DB mutation. The fixture distro list is debian/ubuntu (from initRepoForTest);
+// "raspbian" is deliberately absent.
+func TestAddRejectsUnconfiguredDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "raspbian", "--suite", "bookworm",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), `"raspbian"`,
+		"error should name the offending --distro value")
+	assert.Contains(t, stderr.String(), "config.distros",
+		"error should mention the config field the operator must edit")
+
+	assert.Equal(t, 0, rowCount(t, tmpState), "no DB row must be inserted")
+	assert.Empty(t, listPoolFiles(t, tmpPublic), "no pool file must be written")
 }
 
 // addOnce performs a baseline successful add of a single .deb so subsequent

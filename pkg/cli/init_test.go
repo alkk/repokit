@@ -207,3 +207,17 @@ func TestConfigTemplateHasPublicDirPlaceholder(t *testing.T) {
 	assert.Contains(t, configTemplate, `public_dir: "REPLACE_ME"`,
 		"configTemplate must include a public_dir REPLACE_ME placeholder")
 }
+
+func TestConfigTemplateHasDistros(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(configTemplate), 0o600))
+
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, cfg.Distros, "seed config must include a non-empty distros list")
+	for _, d := range cfg.Distros {
+		assert.Regexp(t, `^[a-zA-Z0-9-]+$`, d, "seed distro %q must satisfy validateDistroName", d)
+	}
+	assert.Contains(t, cfg.Distros, "debian")
+	assert.Contains(t, cfg.Distros, "ubuntu")
+}

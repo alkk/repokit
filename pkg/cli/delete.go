@@ -49,6 +49,9 @@ func (cmd *DeleteCmd) run(c *Context) error {
 	if err := cmd.validate(); err != nil {
 		return err
 	}
+	if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+		return err
+	}
 
 	ctx := context.Background()
 	r, err := repo.Open(ctx, filepath.Join(c.Root, dbFilename))

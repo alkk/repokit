@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/alkk/repokit/pkg/config"
@@ -107,6 +108,36 @@ func requireScopeName(field, val string) error {
 		return fmt.Errorf("--%s is required and must not be empty", field)
 	}
 	return validateScopeName(field, val)
+}
+
+// requireConfiguredDistro rejects --distro values that are not declared in
+// config.distros. This is the gate that stops repokit from touching unrelated
+// trees under the public dir (e.g. raspbian/ or test/ managed by other tools).
+// A nil config or empty Distros list is treated as no distro being configured —
+// callers get the same "not in config.distros" error rather than a panic.
+func requireConfiguredDistro(cfg *config.Config, distro string) error {
+	if distro == "" {
+		return fmt.Errorf("--%s is required and must not be empty", fieldDistro)
+	}
+	var configured []string
+	if cfg != nil {
+		configured = cfg.Distros
+	}
+	if slices.Contains(configured, distro) {
+		return nil
+	}
+	return fmt.Errorf("--%s %q is not in config.distros (configured: %v)", fieldDistro, distro, configured)
+}
+
+// requireConfiguredDistros enforces that config.distros is non-empty. Used by
+// unscoped publish/verify so a legacy or misconfigured repo without a
+// distros: block fails with a clear error rather than silently exiting 0 —
+// the scoped --distro path is already covered by requireConfiguredDistro.
+func requireConfiguredDistros(cfg *config.Config) error {
+	if cfg == nil || len(cfg.Distros) == 0 {
+		return fmt.Errorf("config.distros is empty (edit %s to declare managed distros)", configFilename)
+	}
+	return nil
 }
 
 // Options holds the global flags and all subcommand groups.

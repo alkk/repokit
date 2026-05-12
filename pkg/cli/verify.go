@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -85,6 +86,18 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
 		return nil, err
 	}
+	if cmd.Distro != "" {
+		if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+			return nil, err
+		}
+	} else if err := requireConfiguredDistros(c.Config); err != nil {
+		return nil, err
+	}
+
+	var distros []string
+	if c.Config != nil {
+		distros = c.Config.Distros
+	}
 
 	ctx := context.Background()
 	r, err := repo.Open(ctx, filepath.Join(c.Root, dbFilename))
@@ -104,12 +117,12 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 		// serializes verify --gc against any other writer (add/delete) on
 		// this repo.
 		err = r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
-			return cmd.verifyAndGC(ctx, c.PublicDir, r, conn, report)
+			return cmd.verifyAndGC(ctx, c.PublicDir, distros, c.Stderr, r, conn, report)
 		})
 		if err != nil {
 			return nil, fmt.Errorf("gc pass: %w", err)
 		}
-	} else if err := cmd.verifyOnly(ctx, c.PublicDir, r, report); err != nil {
+	} else if err := cmd.verifyOnly(ctx, c.PublicDir, distros, c.Stderr, r, report); err != nil {
 		return nil, err
 	}
 
@@ -121,16 +134,17 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 // orphans. Concurrent writers may add or delete rows during the walk;
 // without a lock the report is best-effort, which is acceptable when no
 // destructive action follows.
-func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, r *repo.Repo, report *verifyReport) error {
+func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, distros []string, stderr io.Writer, r *repo.Repo, report *verifyReport) error {
 	rows, err := r.List(ctx, repo.Filter{Distro: cmd.Distro, Suite: cmd.Suite})
 	if err != nil {
 		return fmt.Errorf("listing rows: %w", err)
 	}
+	rows = filterRowsByConfiguredDistros(cmd.Distro, rows, distros, stderr)
 	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
 	}
-	return cmd.scanOrphansForScope(ctx, publicDir, r.EnumerateDistros, known, report)
+	return cmd.scanOrphansForScope(publicDir, distros, known, report)
 }
 
 // verifyAndGC runs the same checks as verifyOnly but reads rows through
@@ -138,46 +152,68 @@ func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, r *repo.
 // snapshot no concurrent writer can mutate, then deletes the orphans
 // before releasing the lock.
 func (cmd *VerifyCmd) verifyAndGC(
-	ctx context.Context, publicDir string, r *repo.Repo, conn *sql.Conn, report *verifyReport,
+	ctx context.Context, publicDir string, distros []string, stderr io.Writer, r *repo.Repo, conn *sql.Conn, report *verifyReport,
 ) error {
 	rows, err := r.ListConn(ctx, conn, repo.Filter{Distro: cmd.Distro, Suite: cmd.Suite})
 	if err != nil {
 		return fmt.Errorf("listing rows: %w", err)
 	}
+	rows = filterRowsByConfiguredDistros(cmd.Distro, rows, distros, stderr)
 	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
 	}
-	enumerate := func(ctx context.Context) ([]string, error) {
-		return r.EnumerateDistrosConn(ctx, conn)
-	}
-	if err := cmd.scanOrphansForScope(ctx, publicDir, enumerate, known, report); err != nil {
+	if err := cmd.scanOrphansForScope(publicDir, distros, known, report); err != nil {
 		return err
 	}
 	return removeOrphans(publicDir, report.Orphans)
 }
 
+// filterRowsByConfiguredDistros drops rows whose distro is not in distros and
+// emits one stderr warning per dropped distro. This is the verify counterpart
+// to publish's belt-and-braces filter in allScopes: if the operator removed
+// a distro from config.distros after rows were inserted, hashAndIndex would
+// otherwise open files under an unconfigured tree. Only applied on the
+// unscoped path — when scope is set, requireConfiguredDistro already gated it.
+func filterRowsByConfiguredDistros(scope string, rows []repo.Package, distros []string, stderr io.Writer) []repo.Package {
+	if scope != "" {
+		return rows
+	}
+	skipped := map[string]struct{}{}
+	out := make([]repo.Package, 0, len(rows))
+	for _, p := range rows {
+		if !slices.Contains(distros, p.Distro) {
+			skipped[p.Distro] = struct{}{}
+			continue
+		}
+		out = append(out, p)
+	}
+	names := make([]string, 0, len(skipped))
+	for d := range skipped {
+		names = append(names, d)
+	}
+	sort.Strings(names)
+	for _, d := range names {
+		fmt.Fprintf(stderr,
+			"verify: skipping distro %q: not in config.distros (configured: %v)\n",
+			d, distros)
+	}
+	return out
+}
+
 // scanOrphansForScope dispatches the orphan walk for both the scoped
-// (--distro set) and unscoped paths. The unscoped path unions DB-known
-// distros with on-disk distros so a distro that exists only on disk
-// (e.g. all rows deleted but pool files left behind) is still walked.
+// (--distro set) and unscoped paths. The unscoped path iterates the
+// configured distros from config.yaml — repokit never walks distros the
+// operator has not declared, so unrelated top-level trees under the
+// public dir are left untouched.
 func (cmd *VerifyCmd) scanOrphansForScope(
-	ctx context.Context,
 	publicDir string,
-	enumerate func(context.Context) ([]string, error),
+	distros []string,
 	known map[string]struct{},
 	report *verifyReport,
 ) error {
 	if cmd.Distro != "" {
 		return scanOrphans(publicDir, cmd.Distro, cmd.Suite, known, report)
-	}
-	dbDistros, err := enumerate(ctx)
-	if err != nil {
-		return fmt.Errorf("enumerating distros: %w", err)
-	}
-	distros, err := unionWithDiskDistros(publicDir, dbDistros)
-	if err != nil {
-		return err
 	}
 	return scanOrphansAcrossDistros(publicDir, distros, known, report)
 }
@@ -194,65 +230,6 @@ func hashAndIndex(publicDir string, rows []repo.Package, report *verifyReport) (
 		}
 	}
 	return known, nil
-}
-
-// unionWithDiskDistros merges dbDistros with any <publicDir>/<distro>
-// directory that contains a pool/ subtree. Without the disk side of the
-// union, an unscoped verify would miss orphans in distros that have no DB
-// rows at all — e.g. a crashed add or a delete pass that removed the last
-// row but left the pool file behind. Entries whose name does not pass
-// validateScopeName(fieldDistro, ...) are skipped on both sides so arbitrary
-// user-created top-level dirs do not trigger spurious orphan walks, and a
-// tampered/corrupted DB row carrying ".." or a path separator cannot
-// steer the walk outside the public dir (mirrors dbScopes in publish.go).
-func unionWithDiskDistros(publicDir string, dbDistros []string) ([]string, error) {
-	seen := make(map[string]struct{}, len(dbDistros))
-	out := make([]string, 0, len(dbDistros))
-	for _, d := range dbDistros {
-		if _, ok := seen[d]; ok {
-			continue
-		}
-		if err := validateScopeName(fieldDistro, d); err != nil {
-			continue
-		}
-		seen[d] = struct{}{}
-		out = append(out, d)
-	}
-	entries, err := os.ReadDir(publicDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			sort.Strings(out)
-			return out, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", publicDir, err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		if err := validateScopeName(fieldDistro, name); err != nil {
-			continue
-		}
-		poolPath := filepath.Join(publicDir, name, poolDirName)
-		info, err := os.Stat(poolPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("stat %s: %w", poolPath, err)
-		}
-		if !info.IsDir() {
-			continue
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out, nil
 }
 
 // scanOrphansAcrossDistros walks <publicDir>/<distro>/pool for every distro

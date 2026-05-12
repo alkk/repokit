@@ -326,45 +326,6 @@ func TestDeleteRollsBackOnError(t *testing.T) {
 	require.Len(t, rows, 1, "rolled-back delete must leave row in place")
 }
 
-func TestEnumerateDistros(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("empty DB returns no distros", func(t *testing.T) {
-		r := openTempRepo(t)
-		distros, err := r.EnumerateDistros(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, distros)
-	})
-
-	t.Run("returns distinct distros sorted ascending", func(t *testing.T) {
-		r := openTempRepo(t)
-		insertAll(t, r,
-			samplePackage("ubuntu", "noble", "main", "amd64", "hello", "1.0"),
-			samplePackage("debian", "bookworm", "main", "amd64", "hello", "1.0"),
-			samplePackage("debian", "bullseye", "main", "amd64", "hello", "1.0"),
-			samplePackage("ubuntu", "noble", "main", "arm64", "hello", "1.0"),
-		)
-		distros, err := r.EnumerateDistros(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"debian", "ubuntu"}, distros)
-	})
-
-	t.Run("conn variant reads writer-locked snapshot", func(t *testing.T) {
-		r := openTempRepo(t)
-		insertAll(t, r,
-			samplePackage("debian", "bookworm", "main", "amd64", "hello", "1.0"),
-			samplePackage("ubuntu", "noble", "main", "amd64", "hello", "1.0"),
-		)
-		var got []string
-		require.NoError(t, r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
-			var derr error
-			got, derr = r.EnumerateDistrosConn(ctx, conn)
-			return derr
-		}))
-		assert.Equal(t, []string{"debian", "ubuntu"}, got)
-	})
-}
-
 func TestEnumerateForSuite(t *testing.T) {
 	r := openTempRepo(t)
 	ctx := context.Background()

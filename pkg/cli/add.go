@@ -51,6 +51,9 @@ func (cmd *AddCmd) run(c *Context) error {
 			return err
 		}
 	}
+	if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+		return err
+	}
 	if cmd.Replace && len(cmd.Args.Debs) > 1 {
 		return errors.New("--replace accepts only a single .deb argument (a failed batch with --replace cannot safely roll back overwritten pool files)")
 	}

@@ -77,6 +77,7 @@ func TestIntegration_RealPackages(t *testing.T) {
 	}
 
 	runCmd("init")
+	appendTestDistros(t, tmpState, "debian", "ubuntu")
 
 	// Three versions × two arches of the simple per-arch package.
 	versions := []string{"1.0-1", "1.0-2", "1.1-1"}

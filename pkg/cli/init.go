@@ -29,6 +29,12 @@ signing_key: "REPLACE_ME"
 # Point your webserver's docroot at this directory.
 public_dir: "REPLACE_ME"
 
+# Managed distros. Every --distro argument to add/delete/publish/verify
+# must appear in this list. Edit before first use.
+distros:
+  - debian
+  - ubuntu
+
 suites:
   # Per-suite Release header overrides keyed by <distro>/<suite>.
   # Missing fields default from the key (origin/label = distro, suite/codename = suite).

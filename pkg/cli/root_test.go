@@ -189,6 +189,73 @@ func TestRequireScopeName(t *testing.T) {
 	})
 }
 
+func TestRequireConfiguredDistro(t *testing.T) {
+	configured := &config.Config{Distros: []string{"debian", "ubuntu"}}
+
+	cases := []struct {
+		name        string
+		cfg         *config.Config
+		distro      string
+		wantErr     bool
+		wantContain []string
+	}{
+		{
+			name:        "empty distro rejected",
+			cfg:         configured,
+			distro:      "",
+			wantErr:     true,
+			wantContain: []string{"--distro", "must not be empty"},
+		},
+		{
+			name:    "configured distro accepted",
+			cfg:     configured,
+			distro:  "debian",
+			wantErr: false,
+		},
+		{
+			name:    "second configured distro accepted",
+			cfg:     configured,
+			distro:  "ubuntu",
+			wantErr: false,
+		},
+		{
+			name:        "unconfigured distro rejected names value and list",
+			cfg:         configured,
+			distro:      "raspbian",
+			wantErr:     true,
+			wantContain: []string{`"raspbian"`, "config.distros", "debian", "ubuntu"},
+		},
+		{
+			name:        "empty distros list rejects any value",
+			cfg:         &config.Config{Distros: nil},
+			distro:      "debian",
+			wantErr:     true,
+			wantContain: []string{`"debian"`, "config.distros"},
+		},
+		{
+			name:        "nil config rejects any value without panicking",
+			cfg:         nil,
+			distro:      "debian",
+			wantErr:     true,
+			wantContain: []string{`"debian"`, "config.distros"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := requireConfiguredDistro(tc.cfg, tc.distro)
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			for _, s := range tc.wantContain {
+				assert.Contains(t, err.Error(), s)
+			}
+		})
+	}
+}
+
 // TestDistroPathTraversalRejected guards every command that lets --distro
 // flow into a filesystem path. If a future change forgot the validateScopeName
 // gate, a malicious value like "../etc" would let publish or verify operate
@@ -505,7 +572,7 @@ func TestRunReadsPublicDirFromConfig(t *testing.T) {
 	root := t.TempDir()
 	public := t.TempDir()
 	initRepoForTest(t, root)
-	body := "signing_key: \"ABC123\"\npublic_dir: \"" + public + "\"\n"
+	body := "signing_key: \"ABC123\"\npublic_dir: \"" + public + "\"\ndistros:\n  - debian\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
 	t.Setenv(envPublic, "")
 
@@ -533,7 +600,7 @@ func TestRunVerifyToleratesMissingSigningKey(t *testing.T) {
 	root := t.TempDir()
 	public := t.TempDir()
 	initRepoForTest(t, root)
-	body := "signing_key: \"\"\npublic_dir: \"" + public + "\"\n"
+	body := "signing_key: \"\"\npublic_dir: \"" + public + "\"\ndistros:\n  - debian\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
 	t.Setenv(envPublic, "")
 
@@ -567,7 +634,7 @@ func TestRunVerifyWithReplaceMeFallsBackToConfig(t *testing.T) {
 	root := t.TempDir()
 	public := t.TempDir()
 	initRepoForTest(t, root)
-	body := "signing_key: \"ABC123\"\npublic_dir: \"" + public + "\"\n"
+	body := "signing_key: \"ABC123\"\npublic_dir: \"" + public + "\"\ndistros:\n  - debian\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, configFilename), []byte(body), 0o600))
 	t.Setenv(envPublic, placeholderValue)
 

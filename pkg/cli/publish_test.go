@@ -722,16 +722,16 @@ func TestPublishRejectsMalformedConfig(t *testing.T) {
 
 // TestPublishRequiresSigningKeyWithoutNoSign covers pickSigner's empty-key
 // guard — every other publish test uses --no-sign, so the failure path is
-// otherwise unexercised. The starter config.yaml ships with a non-empty
-// REPLACE_ME for signing_key, so the test removes the file to drive loadConfig
-// down the "no config" branch where SigningKey defaults to empty. --public is
-// passed explicitly so resolvePublicDir succeeds and pickSigner is reached.
+// otherwise unexercised. The test overwrites the seed config with one that
+// lists the test distro but leaves signing_key empty, so resolvePublicDir
+// and requireConfiguredDistro both succeed and pickSigner is reached.
 func TestPublishRequiresSigningKeyWithoutNoSign(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
 	initRepoForTest(t, tmpState)
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
-	require.NoError(t, os.Remove(filepath.Join(tmpState, "config.yaml")))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpState, "config.yaml"),
+		[]byte("distros:\n  - debian\n"), 0o600))
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
@@ -841,4 +841,109 @@ func TestPublishSerializesWithConcurrentWriter(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("publish did not finish after writer lock release")
 	}
+}
+
+// TestPublishRejectsUnconfiguredDistro asserts that a --distro value not in
+// config.distros aborts publish with ExitError before any staging directory
+// is created. The fixture distro list is debian/ubuntu (from
+// initRepoForTest); "raspbian" is deliberately absent.
+func TestPublishRejectsUnconfiguredDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "publish",
+		"--distro", "raspbian", "--suite", "bullseye", "--no-sign",
+	}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), `"raspbian"`,
+		"error should name the offending --distro value")
+	assert.Contains(t, stderr.String(), "config.distros",
+		"error should mention the config field the operator must edit")
+
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "raspbian", "dists", "bullseye.new"),
+		"no staging dir must be created when the distro is rejected upfront")
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "raspbian"),
+		"no tree must be created for the rejected distro")
+}
+
+// TestPublishAllScopesIgnoresUnconfiguredDiskDistro is the regression case
+// for the bug this change fixes for the publish path: an unrelated tree at
+// <publicDir>/raspbian/dists/bullseye/ (managed by another tool) must not
+// be picked up by a no-arg publish. Without the cfg.Distros constraint on
+// filesystemScopes, repokit would atomically replace it.
+func TestPublishAllScopesIgnoresUnconfiguredDiskDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+
+	raspbianRelease := filepath.Join(tmpPublic, "raspbian", "dists", "bullseye", "Release")
+	require.NoError(t, os.MkdirAll(filepath.Dir(raspbianRelease), 0o755))
+	originalBody := []byte("Origin: Raspbian\nSuite: bullseye\n")
+	require.NoError(t, os.WriteFile(raspbianRelease, originalBody, 0o644))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+		&stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "no suites to publish")
+
+	body, err := os.ReadFile(raspbianRelease)
+	require.NoError(t, err)
+	assert.Equal(t, originalBody, body,
+		"unconfigured distro tree must be left exactly as it was")
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "raspbian", "dists", "bullseye.new"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "raspbian", "dists", "bullseye.old"))
+}
+
+// TestPublishAllScopesSkipsUnconfiguredDBRow covers the belt-and-braces
+// filter in allScopes: if a row for an unconfigured distro exists in the DB
+// (because the operator removed the distro from config.distros after rows
+// were already inserted), no-arg publish must skip it and warn rather than
+// materialize a tree under the unconfigured distro.
+func TestPublishAllScopesSkipsUnconfiguredDBRow(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
+	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "raspbian", "bullseye", "armhf", "beta", "1.0"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+		&stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "published 1 suite(s)",
+		"only the configured distro's suite must be published")
+	assert.Contains(t, stderr.String(), `"raspbian"`,
+		"stderr must warn that the unconfigured distro was skipped")
+	assert.Contains(t, stderr.String(), "config.distros",
+		"stderr warning must point at the config field")
+
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release"))
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "raspbian", "dists", "bullseye"),
+		"unconfigured distro must not be materialized from a stale DB row")
+}
+
+// TestPublishUnscopedRejectsEmptyDistros guards the hard-cutover promise:
+// an existing repo whose config.yaml has no distros: block (or an empty
+// list) must fail with a clear error when run unscoped, not silently
+// print "no suites to publish" and exit 0. The scoped --distro path is
+// already covered by requireConfiguredDistro.
+func TestPublishUnscopedRejectsEmptyDistros(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	body := "signing_key: ABC123\npublic_dir: \"" + tmpPublic + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpState, configFilename), []byte(body), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+		&stdout, &stderr, "test-rev")
+	require.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), "config.distros is empty")
+	assert.NotContains(t, stdout.String(), "no suites to publish",
+		"empty distros must fail loudly, not silently report no-op success")
 }

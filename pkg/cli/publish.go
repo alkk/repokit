@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +60,13 @@ func (cmd *PublishCmd) run(c *Context) error {
 	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
 		return err
 	}
+	if cmd.Distro != "" {
+		if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+			return err
+		}
+	} else if err := requireConfiguredDistros(c.Config); err != nil {
+		return err
+	}
 
 	ctx := context.Background()
 	cfg := c.Config
@@ -68,7 +77,7 @@ func (cmd *PublishCmd) run(c *Context) error {
 	}
 	defer r.Close()
 
-	scopes, err := cmd.resolveScopes(ctx, c.PublicDir, r)
+	scopes, err := cmd.resolveScopes(ctx, c.PublicDir, cfg.Distros, c.Stderr, r)
 	if err != nil {
 		return err
 	}
@@ -103,14 +112,15 @@ func (cmd *PublishCmd) run(c *Context) error {
 // targets to rebuild. Both empty fans out to every suite present in the DB
 // or as an existing dists/ tree on disk; a single side specified without the
 // other is rejected.
-func (cmd *PublishCmd) resolveScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, error) {
+func (cmd *PublishCmd) resolveScopes(ctx context.Context, publicDir string, distros []string,
+	stderr io.Writer, r *repo.Repo) ([]scope, error) {
 	if cmd.Distro != "" && cmd.Suite != "" {
 		return []scope{{distro: cmd.Distro, suite: cmd.Suite}}, nil
 	}
 	if cmd.Distro != "" || cmd.Suite != "" {
 		return nil, errors.New("--distro and --suite must be provided together (or both omitted to publish all)")
 	}
-	return allScopes(ctx, publicDir, r)
+	return allScopes(ctx, publicDir, distros, stderr, r)
 }
 
 // pickSigner selects the signing backend. --no-sign always picks NopSigner.
@@ -429,11 +439,14 @@ func swapDists(distsParent, live, fresh, old string) error {
 }
 
 // allScopes returns every distinct (distro, suite) tuple known to the repo —
-// both rows present in the packages table and live trees under dists/.
-// Including filesystem scopes ensures that suites which were emptied by
-// `delete` still get republished (with empty indexes) so apt clients stop
-// seeing the stale Packages files.
-func allScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, error) {
+// both rows present in the packages table and live trees under dists/ for the
+// configured distros. Filesystem scopes ensure that suites which were emptied
+// by `delete` still get republished (with empty indexes) so apt clients stop
+// seeing the stale Packages files. After unioning, scopes whose distro is not
+// in distros are dropped with a stderr warning: this catches legacy DB rows
+// from a distro the operator has since removed from config.distros.
+func allScopes(ctx context.Context, publicDir string, distros []string,
+	stderr io.Writer, r *repo.Repo) ([]scope, error) {
 	seen := map[scope]struct{}{}
 
 	dbScopes, err := dbScopes(ctx, r)
@@ -444,7 +457,7 @@ func allScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, er
 		seen[s] = struct{}{}
 	}
 
-	fsScopes, err := filesystemScopes(publicDir)
+	fsScopes, err := filesystemScopes(publicDir, distros)
 	if err != nil {
 		return nil, err
 	}
@@ -452,8 +465,13 @@ func allScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, er
 		seen[s] = struct{}{}
 	}
 
+	skipped := map[string]struct{}{}
 	out := make([]scope, 0, len(seen))
 	for s := range seen {
+		if !slices.Contains(distros, s.distro) {
+			skipped[s.distro] = struct{}{}
+			continue
+		}
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -462,6 +480,16 @@ func allScopes(ctx context.Context, publicDir string, r *repo.Repo) ([]scope, er
 		}
 		return out[i].suite < out[j].suite
 	})
+	skippedNames := make([]string, 0, len(skipped))
+	for d := range skipped {
+		skippedNames = append(skippedNames, d)
+	}
+	sort.Strings(skippedNames)
+	for _, d := range skippedNames {
+		fmt.Fprintf(stderr,
+			"publish: skipping distro %q: not in config.distros (configured: %v)\n",
+			d, distros)
+	}
 	return out, nil
 }
 
@@ -499,32 +527,19 @@ func dbScopes(ctx context.Context, r *repo.Repo) ([]scope, error) {
 }
 
 // filesystemScopes walks <publicDir>/<distro>/dists/<suite>/ to discover
-// suites with an existing live tree on disk. The outer loop reads top-level
-// <publicDir> entries and treats each directory that passes validateScopeName
-// and contains a dists/ subdirectory as a candidate distro — arbitrary
-// user-created top-level dirs are skipped, and the validateScopeName gate
-// prevents a malformed top-level directory name from triggering atomic-swap
-// operations on unrelated content. Staging siblings (.new, .old) are skipped
-// at the suite level, and only directories that contain a Release file are
-// treated as publish targets — without that gate, a stray directory under
-// dists/ would be wiped by the atomic swap on the next publish (no flags).
-func filesystemScopes(publicDir string) ([]scope, error) {
-	topLevel, err := os.ReadDir(publicDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", publicDir, err)
-	}
+// suites with an existing live tree on disk. The outer loop iterates the
+// caller-supplied distros (sourced from cfg.Distros) rather than scanning
+// top-level <publicDir> entries: the public dir may legitimately contain
+// unrelated trees (e.g. raspbian/ managed by other tools), and a no-arg
+// publish must never atomically replace them. Staging siblings (.new, .old)
+// are skipped at the suite level, and only directories that contain a
+// Release file are treated as publish targets — without that gate, a stray
+// directory under dists/ would be wiped by the atomic swap on the next
+// publish (no flags).
+func filesystemScopes(publicDir string, distros []string) ([]scope, error) {
 	var out []scope
-	for _, d := range topLevel {
-		if !d.IsDir() {
-			continue
-		}
-		if err := validateScopeName(fieldDistro, d.Name()); err != nil {
-			continue
-		}
-		suitesPath := filepath.Join(publicDir, d.Name(), distsDir)
+	for _, distro := range distros {
+		suitesPath := filepath.Join(publicDir, distro, distsDir)
 		info, err := os.Stat(suitesPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -556,7 +571,7 @@ func filesystemScopes(publicDir string) ([]scope, error) {
 			if err := validateScopeName(fieldSuite, name); err != nil {
 				continue
 			}
-			out = append(out, scope{distro: d.Name(), suite: name})
+			out = append(out, scope{distro: distro, suite: name})
 		}
 	}
 	return out, nil
