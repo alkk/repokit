@@ -101,9 +101,21 @@ func TestDiskPath(t *testing.T) {
 	t.Run("different distros yield different disk paths", func(t *testing.T) {
 		debian := DiskPath("debian", filename)
 		ubuntu := DiskPath("ubuntu", filename)
+		namespaced := DiskPath("customer/acme", filename)
 		assert.NotEqual(t, debian, ubuntu)
+		assert.NotEqual(t, debian, namespaced)
+		assert.NotEqual(t, ubuntu, namespaced)
 		assert.True(t, strings.HasPrefix(debian, "debian/"))
 		assert.True(t, strings.HasPrefix(ubuntu, "ubuntu/"))
+		assert.True(t, strings.HasPrefix(namespaced, "customer/acme/"))
+	})
+
+	t.Run("namespaced distro nests under prefix segment", func(t *testing.T) {
+		got := DiskPath("customer/acme", filename)
+		assert.Equal(t,
+			"customer/acme/pool/bookworm/main/h/hello/hello_1.0_amd64.deb",
+			got,
+		)
 	})
 
 	t.Run("uses forward slashes regardless of OS", func(t *testing.T) {
@@ -398,6 +410,42 @@ func TestSafeJoinRejectsTraversal(t *testing.T) {
 func TestSafeJoinRejectsParentInsideRoot(t *testing.T) {
 	root := t.TempDir()
 	for _, rel := range []string{"debian/../config.yaml", "debian/..", "a/../b"} {
+		_, err := SafeJoin(root, rel)
+		require.Error(t, err, "expected rejection for %q", rel)
+		assert.Contains(t, err.Error(), "..")
+	}
+}
+
+// TestSafeJoinAcceptsNamespacedDistro pins that the embedded slash in a
+// namespaced distro segment is not itself flagged as suspicious: a
+// legitimate DiskPath("customer/acme", filename) resolves cleanly under
+// the public root.
+func TestSafeJoinAcceptsNamespacedDistro(t *testing.T) {
+	root := t.TempDir()
+	filename := Filename("stable", "main", "hello", "hello", "1.0", "amd64")
+	rel := DiskPath("customer/acme", filename)
+
+	dest, err := SafeJoin(root, rel)
+	require.NoError(t, err)
+	rootAbs, err := filepath.Abs(root)
+	require.NoError(t, err)
+	want := filepath.Join(rootAbs, "customer", "acme", "pool", "stable", "main", "h", "hello", "hello_1.0_amd64.deb")
+	assert.Equal(t, want, dest)
+}
+
+// TestSafeJoinRejectsNamespacedTraversal covers traversal attempts that
+// piggy-back on the namespaced form: a malformed distro segment whose
+// second half is `..`, and a `..` segment injected via filename. Both
+// must be rejected so a corrupted distro string cannot escape into a
+// sibling subtree or repo-root metadata.
+func TestSafeJoinRejectsNamespacedTraversal(t *testing.T) {
+	root := t.TempDir()
+	filename := Filename("stable", "main", "hello", "hello", "1.0", "amd64")
+	for _, rel := range []string{
+		DiskPath("customer/..", filename),
+		DiskPath("customer/acme", "../../../etc/passwd"),
+		DiskPath("../escape", filename),
+	} {
 		_, err := SafeJoin(root, rel)
 		require.Error(t, err, "expected rejection for %q", rel)
 		assert.Contains(t, err.Error(), "..")

@@ -21,7 +21,7 @@ import (
 // target. It only mutates the database and the pool tree; publishing the
 // dists/ index requires a separate `repokit publish` invocation.
 type AddCmd struct {
-	Distro    string `long:"distro" description:"target distribution (e.g. debian, ubuntu)" required:"true"`
+	Distro    string `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
 	Suite     string `long:"suite" description:"target suite (e.g. bookworm)" required:"true"`
 	Component string `long:"component" default:"main" description:"target component"`
 	Replace   bool   `long:"replace" description:"overwrite an existing package with the same name/version/architecture"`
@@ -44,8 +44,11 @@ func (cmd *AddCmd) Execute(c *Context) int {
 // the DB rolls back and pool files written earlier in the batch are deleted
 // in reverse order to keep the on-disk tree consistent with the DB.
 func (cmd *AddCmd) run(c *Context) error {
+	if err := requireDistroScope(cmd.Distro); err != nil {
+		return err
+	}
 	for field, val := range map[string]string{
-		fieldDistro: cmd.Distro, fieldSuite: cmd.Suite, "component": cmd.Component,
+		fieldSuite: cmd.Suite, "component": cmd.Component,
 	} {
 		if err := requireScopeName(field, val); err != nil {
 			return err

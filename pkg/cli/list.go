@@ -14,7 +14,7 @@ import (
 // ListCmd prints packages matching the supplied filters in either a
 // human-friendly aligned table or line-delimited JSON for scripting.
 type ListCmd struct {
-	Distro    string `long:"distro" description:"filter by distribution"`
+	Distro    string `long:"distro" description:"filter by distribution (plain like 'debian' or namespaced like 'customer/acme')"`
 	Suite     string `long:"suite" description:"filter by suite"`
 	Component string `long:"component" description:"filter by component"`
 	Arch      string `long:"arch" description:"filter by architecture"`

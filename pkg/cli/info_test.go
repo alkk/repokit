@@ -102,6 +102,28 @@ func TestInfoRejectsUnsafeScope(t *testing.T) {
 	assert.Contains(t, stderr.String(), "--distro")
 }
 
+// TestInfoAcceptsNamespacedDistro covers Task 3 repointing of info's
+// scope validator: a namespaced --distro must parse without rejection and
+// produce a disk pool path nested under <distro>/...
+func TestInfoAcceptsNamespacedDistro(t *testing.T) {
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	t.Setenv(envRepo, "")
+	t.Chdir(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"info",
+		"--distro", "customer/acme", "--suite", "stable",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	out := stdout.String()
+	assert.Contains(t, out, "Pool path (apt):  pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb")
+	assert.Contains(t, out, "Pool path (disk): customer/acme/pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb")
+}
+
 func TestInfoDoesNotRequireRepo(t *testing.T) {
 	// resolve fixture absolute path before chdir, since fixtureDeb is cwd-relative.
 	deb := fixtureDeb(t, "hello-xz_1.0_amd64.deb")

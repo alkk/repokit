@@ -12,7 +12,7 @@ import (
 // touching the repo. Distro/Suite/Component are optional flags that, when
 // provided, materialize the full target pool path.
 type InfoCmd struct {
-	Distro    string `long:"distro" description:"distribution to compute target pool path for"`
+	Distro    string `long:"distro" description:"distribution to compute target pool path for (plain like 'debian' or namespaced like 'customer/acme')"`
 	Suite     string `long:"suite" description:"suite to compute target pool path for"`
 	Component string `long:"component" default:"main" description:"component to compute target pool path for"`
 
@@ -31,8 +31,11 @@ func (cmd *InfoCmd) Execute(c *Context) int {
 }
 
 func (cmd *InfoCmd) run(w io.Writer) error {
+	if err := validateDistroScope(cmd.Distro); err != nil {
+		return err
+	}
 	for field, val := range map[string]string{
-		fieldDistro: cmd.Distro, fieldSuite: cmd.Suite, "component": cmd.Component,
+		fieldSuite: cmd.Suite, "component": cmd.Component,
 	} {
 		if err := validateScopeName(field, val); err != nil {
 			return err

@@ -110,6 +110,36 @@ func requireScopeName(field, val string) error {
 	return validateScopeName(field, val)
 }
 
+// validateDistroScope validates a --distro value using the same alphabet rules
+// as config.ValidateDistroName so plain (`debian`) and one-level namespaced
+// (`customer/acme`) forms are both accepted. The error is re-wrapped to quote
+// `--distro <value>` in the same style as validateScopeName so operators get a
+// uniform CLI-shaped message regardless of which validator fired. An empty
+// value is permitted so callers that treat --distro as an optional filter
+// (verify, publish) can pass it through; commands where the field is required
+// gate emptiness via requireDistroScope.
+func validateDistroScope(val string) error {
+	if val == "" {
+		return nil
+	}
+	if err := config.ValidateDistroName(val); err != nil {
+		return fmt.Errorf("--%s %q: %w", fieldDistro, val, err)
+	}
+	return nil
+}
+
+// requireDistroScope validates val and additionally rejects an empty value.
+// Parallels requireScopeName for the --distro flag on commands where the field
+// is mandatory (add, delete) — a `--distro=""` typo (which go-flags accepts
+// because required:"true" only checks presence) is rejected here rather than
+// silently producing a malformed pool tree.
+func requireDistroScope(val string) error {
+	if val == "" {
+		return fmt.Errorf("--%s is required and must not be empty", fieldDistro)
+	}
+	return validateDistroScope(val)
+}
+
 // requireConfiguredDistro rejects --distro values that are not declared in
 // config.distros. This is the gate that stops repokit from touching unrelated
 // trees under the public dir (e.g. raspbian/ or test/ managed by other tools).

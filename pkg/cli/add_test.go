@@ -601,6 +601,32 @@ func TestAddRejectsUnconfiguredDistro(t *testing.T) {
 	assert.Empty(t, listPoolFiles(t, tmpPublic), "no pool file must be written")
 }
 
+// TestAddAcceptsNamespacedDistro covers the Task 3 repointing of the --distro
+// validator. With distros: [customer/acme] declared in config, an
+// `add --distro customer/acme` invocation must pass requireDistroScope (no
+// slash rejection) and requireConfiguredDistro (lookup matches), and produce a
+// pool file nested under <publicDir>/customer/acme/pool/...
+func TestAddAcceptsNamespacedDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	appendTestDistros(t, tmpState, "customer/acme")
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "customer/acme", "--suite", "stable",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	want := filepath.Join(tmpPublic, filepath.FromSlash(
+		"customer/acme/pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
+	assert.FileExists(t, want, "pool file must land under the namespaced subtree")
+	assert.Equal(t, 1, rowCount(t, tmpState))
+}
+
 // addOnce performs a baseline successful add of a single .deb so subsequent
 // scenarios can exercise duplicate / replace logic against a populated repo.
 func addOnce(t *testing.T, state, public, deb string) {

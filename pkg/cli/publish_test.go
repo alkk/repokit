@@ -571,6 +571,74 @@ func TestPublishAllScopesSkipsInvalidDiscoveredScopeNames(t *testing.T) {
 	assert.NoDirExists(t, stray+suiteSuffixOld)
 }
 
+// TestDBScopesAcceptsNamespacedDistro covers the Task 3 repointing of the
+// dbScopes filter to validateDistroScope. A row with a one-level namespaced
+// distro must surface in the dbScopes output (so an unscoped publish actually
+// emits its indexes), while a row with depth >= 3 must still be filtered out
+// because validateDistroScope rejects it.
+func TestDBScopesAcceptsNamespacedDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+
+	good := fakePackage(t, tmpPublic, "customer/acme", "stable", "amd64", "hello", "1.0")
+	insertPackage(t, tmpState, good)
+
+	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+
+	// Inject a depth-3 row directly so we can confirm the validator still
+	// filters out malformed namespaced values. `add` would reject this on the
+	// way in, so we go around it via raw SQL — mirroring how the prior test
+	// drove `..` through dbScopes.
+	_, err = r.DB().ExecContext(context.Background(),
+		`INSERT INTO packages (distro, suite, component, architecture, name, version,
+			filename, size, md5, sha1, sha256, sha512, control, added_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"foo/bar/baz", "stable", "main", "amd64", "ghost", "1.0",
+		"pool/stable/main/g/ghost/ghost_1.0_amd64.deb", int64(0),
+		"d41d8cd98f00b204e9800998ecf8427e",
+		"da39a3ee5e6b4b0d3255bfef95601890afd80709",
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+		"Package: ghost\n", time.Now().Unix())
+	require.NoError(t, err)
+
+	scopes, err := dbScopes(context.Background(), r)
+	require.NoError(t, err)
+
+	distros := make([]string, 0, len(scopes))
+	for _, sc := range scopes {
+		distros = append(distros, sc.distro)
+	}
+	assert.Contains(t, distros, "customer/acme",
+		"namespaced distro row must surface in dbScopes (regression: validateScopeName silently dropped it)")
+	assert.NotContains(t, distros, "foo/bar/baz",
+		"depth-3 distro must still be filtered by validateDistroScope")
+}
+
+// TestPublishUnscopedEmitsNamespacedDistro is a thin integration check that
+// an unscoped `publish` actually emits indexes for a namespaced distro that
+// reached the DB via add. Without the dbScopes repointing in Task 3, this
+// would silently produce "no suites to publish".
+func TestPublishUnscopedEmitsNamespacedDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	appendTestDistros(t, tmpState, "customer/acme")
+
+	pkg := fakePackage(t, tmpPublic, "customer/acme", "stable", "amd64", "hello", "1.0")
+	insertPackage(t, tmpState, pkg)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+		&stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "published 1 suite(s)")
+	assert.DirExists(t, filepath.Join(tmpPublic, "customer", "acme", "dists", "stable"))
+}
+
 // TestPublishAllScopesSkipsInvalidDBScopeNames mirrors the filesystem-scope
 // guard for the database side: rows whose distro/suite would not pass
 // validateScopeName (control chars, '..' segment, reserved staging suffix,

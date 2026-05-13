@@ -40,10 +40,15 @@ public_dir is not set: edit <state-dir>/config.yaml or pass --public / $REPOKIT_
 
 Scope flag values (`--distro`, `--suite`, `--component`, `--arch`) are
 validated against path-traversal and Release-injection vectors. They must not
-be `.` or `..`, must not start with `.` or `-`, and must not contain `/`,
-`\`, NUL, spaces, or control characters. Suite names additionally must not
+be `.` or `..`, must not start with `.` or `-`, and must not contain `\`,
+NUL, spaces, or control characters. `--suite`, `--component`, and `--arch`
+are single path segments and additionally reject `/`; `--suite` must also not
 end in `.new` or `.old` — those suffixes are reserved by `publish` for
-staging siblings.
+staging siblings. `--distro` may contain at most one `/` so it can name a
+namespaced distro (`customer/acme`) — each side of the slash is held to the
+`[a-zA-Z0-9-]+` distro alphabet, must be non-empty, and must not start with
+`-`. Whatever `--distro` resolves to must also appear in `config.yaml`'s
+`distros:` list for `add`, `delete`, `publish`, and `verify`.
 
 ## Exit codes
 
@@ -90,7 +95,7 @@ repokit add --distro <d> --suite <s> [--component <c>] [--replace] <deb>...
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--distro <d>` | yes | — | target distribution (e.g. `debian`, `ubuntu`) |
+| `--distro <d>` | yes | — | target distribution — plain (`debian`) or one-level namespaced (`customer/acme`); must be declared in `config.yaml`'s `distros:` |
 | `--suite <s>` | yes | — | target suite (e.g. `bookworm`) |
 | `--component <c>` | no | `main` | target component |
 | `--replace` | no | off | overwrite an existing same-NVRA package |
@@ -126,7 +131,7 @@ repokit delete --distro <d> --suite <s> [filters...] [--all-versions] [--dry-run
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--distro <d>` | yes | — | target distribution |
+| `--distro <d>` | yes | — | target distribution — plain (`debian`) or one-level namespaced (`customer/acme`); must be declared in `config.yaml`'s `distros:` |
 | `--suite <s>` | yes | — | target suite |
 | `--component <c>` | no | — | filter by component |
 | `--arch <a>` | no | — | filter by architecture |
@@ -149,7 +154,7 @@ repokit list [filters...] [--format table|json]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--distro <d>` | — | filter by distribution |
+| `--distro <d>` | — | filter by distribution (plain or namespaced) |
 | `--suite <s>` | — | filter by suite |
 | `--component <c>` | — | filter by component |
 | `--arch <a>` | — | filter by architecture |
@@ -188,7 +193,7 @@ repokit publish [--distro <d> --suite <s>] [--no-sign]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--distro <d>` | — | target distribution (must be paired with `--suite`) |
+| `--distro <d>` | — | target distribution — plain or one-level namespaced; must be paired with `--suite` |
 | `--suite <s>` | — | target suite (must be paired with `--distro`) |
 | `--no-sign` | off | skip signing — produce stub `InRelease`/`Release.gpg` |
 
@@ -233,7 +238,7 @@ repokit verify [--distro <d>] [--suite <s>] [--gc]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--distro <d>` | — | limit to one distribution |
+| `--distro <d>` | — | limit to one distribution (plain or namespaced) |
 | `--suite <s>` | — | limit to one suite (requires `--distro`) |
 | `--gc` | off | remove orphan pool files |
 
@@ -278,6 +283,7 @@ starter template is written by `init`.
 distros:                          # managed distros — every --distro flag must
   - debian                        # appear here; unconfigured values are rejected
   - ubuntu
+  - customer/acme                 # one-level namespaced distros are allowed
 
 signing_key: "DEADBEEF1234..."   # gpg key id or fingerprint (required for signed publish)
 public_dir: "/srv/apt"           # absolute path the webserver docroot points at
@@ -292,14 +298,16 @@ suites:
   debian/bullseye:
     origin: "MyRepo"
     # remaining fields default from the key
+  customer/acme/stable:           # namespaced distro → three-segment key
+    origin: "Acme"
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `distros` | list of strings | yes for add/delete/publish/verify | `[]` | distros repokit is allowed to manage; entries must match `[a-zA-Z0-9-]+`, no duplicates, and every `suites:` key's distro half must appear here |
+| `distros` | list of strings | yes for add/delete/publish/verify | `[]` | distros repokit is allowed to manage; each entry is either a plain `[a-zA-Z0-9-]+` segment or two such segments joined by exactly one `/` (`customer/acme`); no duplicates, no entry deeper than one `/`, a plain entry may not share its top-level segment with a namespaced one (`[customer, customer/acme]` is rejected), and every `suites:` key's distro half must appear here |
 | `signing_key` | string | yes (unless `--no-sign`) | — | gpg key id or fingerprint that signs `Release` |
 | `public_dir` | string | yes for add/delete/publish/verify (unless `--public` / `$REPOKIT_PUBLIC` is set) | — | absolute path to the public-facing tree |
-| `suites` | map | no | `{}` | per-suite Release header overrides keyed by `<distro>/<suite>` |
+| `suites` | map | no | `{}` | per-suite Release header overrides keyed by `<distro>/<suite>` (a namespaced distro yields a three-segment key like `customer/acme/stable` — the key is split on its **last** `/`) |
 | `suites[k].origin` | string | no | `<distro>` | `Origin:` field in `Release` |
 | `suites[k].label` | string | no | `<distro>` | `Label:` field in `Release` |
 | `suites[k].suite` | string | no | `<suite>` | `Suite:` field in `Release` |
@@ -327,7 +335,10 @@ in two **separate directories** so the webserver docroot can point at the
 public tree without exposing `repo.db` or the signing config. Each `<distro>`
 subtree under the public dir is a self-contained apt repo root: an apt client
 points `URI` at `<server-root>/<distro>` and resolves `dists/<suite>/Release`
-relative to that base.
+relative to that base. A namespaced distro like `customer/acme` simply expands
+`<distro>` to the nested path `customer/acme/` — the apt `URI` becomes
+`<server-root>/customer/acme`, and `Filename:` in `Packages` still omits the
+entire `<distro>` prefix (clients get it from the `URI` base, not the field).
 
 State dir (`--repo` / `$REPOKIT_ROOT` / `~/.repokit/`):
 
@@ -343,6 +354,8 @@ Public dir (`--public` / `$REPOKIT_PUBLIC` / `public_dir` in config.yaml) —
 ```
 <public-dir>/
 └── <distro>/                   # one subtree per distro — its own apt repo root
+    │                           # (a namespaced distro like customer/acme nests
+    │                           #  one extra level: customer/acme/{pool,dists}/)
     ├── pool/
     │   └── <suite>/<component>/<letter>/<source>/<pkg>_<ver>_<arch>.deb
     └── dists/
@@ -362,7 +375,7 @@ use `lib<second-letter>` per Debian convention (e.g. `libfoo` →
 `libf/libfoo/`).
 
 The `Filename:` field emitted in each `Packages` index is apt-relative — it
-omits the leading `<distro>` segment and reads
+omits the entire `<distro>` prefix (including any namespace segment) and reads
 `pool/<suite>/<component>/<letter>/<source>/<pkg>_<ver>_<arch>.deb`. Apt
 joins it onto the configured `URI` (which already ends in `/<distro>`) to
 form the download URL.

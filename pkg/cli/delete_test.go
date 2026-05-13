@@ -390,6 +390,42 @@ func TestDeleteRejectsUnconfiguredDistro(t *testing.T) {
 	assert.Equal(t, 1, poolFileCount(t, tmpPublic), "no pool file must be removed")
 }
 
+// TestDeleteAcceptsNamespacedDistro covers the Task 3 repointing of the
+// --distro validator on delete. With distros: [customer/acme] declared, a
+// `delete --distro customer/acme` invocation must pass requireDistroScope
+// (no slash rejection) and requireConfiguredDistro (lookup matches).
+func TestDeleteAcceptsNamespacedDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	appendTestDistros(t, tmpState, "customer/acme")
+
+	insertPackage(t, tmpState, repo.Package{
+		Distro:       "customer/acme",
+		Suite:        "stable",
+		Component:    "main",
+		Architecture: "amd64",
+		Name:         "foo",
+		Version:      "1.0",
+		Filename:     "pool/stable/main/f/foo/foo_1.0_amd64.deb",
+		Size:         1,
+		MD5:          "00000000000000000000000000000000",
+		SHA1:         "0000000000000000000000000000000000000000",
+		SHA256:       "0000000000000000000000000000000000000000000000000000000000000000",
+		SHA512: "00000000000000000000000000000000000000000000000000000000000000000" +
+			"0000000000000000000000000000000000000000000000000000000000000000",
+		Control: "Package: foo\nVersion: 1.0\nArchitecture: amd64\n",
+	})
+
+	code, stdout, stderr := runDelete(t, tmpState, tmpPublic,
+		"--distro", "customer/acme", "--suite", "stable",
+		"--name", "foo", "--version", "1.0",
+	)
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "deleted 1 package(s)")
+	assert.Equal(t, 0, rowCount(t, tmpState))
+}
+
 // TestDeletePoolUnlinksTargetPublicDir is a focused regression check that the
 // pool unlink path uses ctx.PublicDir, not ctx.Root: the state dir must be
 // untouched by the delete, and the file under tmpPublic must be gone.

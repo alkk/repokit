@@ -95,18 +95,41 @@ func TestLoad(t *testing.T) {
 		assert.Contains(t, err.Error(), "<distro>/<suite>")
 	})
 
-	t.Run("suite key with extra slash is rejected", func(t *testing.T) {
-		// SuiteOrDefault looks up exactly "<distro>/<suite>" and the CLI
-		// rejects "/" inside --suite, so a key like "debian/bookworm/security"
-		// is unreachable. Reject it at load time rather than silently
-		// accepting a dead config entry.
-		path := filepath.Join(t.TempDir(), "extraslash.yaml")
+	t.Run("namespaced suite key parses with last-slash split", func(t *testing.T) {
+		// splitSuiteKey uses LastIndex('/') so a namespaced distro like
+		// "customer/acme" combined with suite "stable" yields key
+		// "customer/acme/stable" and parses to ("customer/acme", "stable").
+		path := filepath.Join(t.TempDir(), "nsuite.yaml")
 		require.NoError(t, os.WriteFile(path,
-			[]byte("signing_key: KEY\nsuites:\n  debian/bookworm/security:\n    origin: x\n"), 0o600))
+			[]byte("signing_key: KEY\ndistros:\n  - customer/acme\nsuites:\n  customer/acme/stable:\n    origin: Acme\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		s, ok := c.Suites["customer/acme/stable"]
+		require.True(t, ok)
+		assert.Equal(t, "Acme", s.Origin)
+		// defaults fill in for Suite/Codename from the right half
+		assert.Equal(t, "stable", s.Suite)
+		assert.Equal(t, "stable", s.Codename)
+		// SuiteOrDefault round-trips against the loaded config
+		got := c.SuiteOrDefault("customer/acme", "stable")
+		assert.Equal(t, "Acme", got.Origin)
+		// default Label falls back to the namespaced distro verbatim
+		assert.Equal(t, "customer/acme", got.Label)
+	})
+
+	t.Run("suite key with too-deep distro is rejected by distro validator", func(t *testing.T) {
+		// With last-'/' split, "customer/acme/stable/extra" parses to
+		// ("customer/acme/stable", "extra") and the left half then fails
+		// ValidateDistroName because it contains two '/' separators.
+		path := filepath.Join(t.TempDir(), "toodeep.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - customer/acme\nsuites:\n  customer/acme/stable/extra:\n    origin: x\n"), 0o600))
 
 		_, err := Load(path)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "<distro>/<suite>")
+		assert.Contains(t, err.Error(), "customer/acme/stable")
+		assert.Contains(t, err.Error(), "single segment or two segments")
 	})
 
 	t.Run("valid public_dir is parsed", func(t *testing.T) {
@@ -221,6 +244,38 @@ func TestLoad(t *testing.T) {
 		assert.Contains(t, err.Error(), "deb ian")
 	})
 
+	t.Run("namespaced distro conflicts with plain prefix is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "conflict.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - customer\n  - customer/acme\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "customer/acme")
+		assert.Contains(t, err.Error(), "customer")
+	})
+
+	t.Run("namespaced before plain prefix is rejected (order independent)", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "conflict-rev.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - customer/acme\n  - customer\n"), 0o600))
+
+		_, err := Load(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "customer/acme")
+		assert.Contains(t, err.Error(), "customer")
+	})
+
+	t.Run("sibling namespaced distros without plain prefix are accepted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "siblings.yaml")
+		require.NoError(t, os.WriteFile(path,
+			[]byte("signing_key: KEY\ndistros:\n  - customer/acme\n  - customer/beta\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"customer/acme", "customer/beta"}, c.Distros)
+	})
+
 	t.Run("suite distro not in distros list is rejected", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "mismatch.yaml")
 		require.NoError(t, os.WriteFile(path,
@@ -244,11 +299,21 @@ func TestValidateDistroName(t *testing.T) {
 		{"alphanumeric", "epel8", false},
 		{"single char", "a", false},
 		{"uppercase allowed", "Debian", false},
+		{"namespaced", "customer/acme", false},
+		{"namespaced both with hyphen", "customer-1/acme-2", false},
 		{"leading hyphen", "-debian", true},
 		{"empty", "", true},
 		{"contains space", "de bian", true},
-		{"contains slash", "debian/sub", true},
-		{"dots", "..", true},
+		{"too deep", "customer/acme/extra", true},
+		{"leading slash", "/acme", true},
+		{"trailing slash", "customer/", true},
+		{"empty middle", "customer//acme", true},
+		{"dot segment right", "customer/.", true},
+		{"dotdot segment right", "customer/..", true},
+		{"leading dash on right", "customer/-acme", true},
+		{"leading dash on left", "-customer/acme", true},
+		{"plain dot", ".", true},
+		{"plain dotdot", "..", true},
 		{"non-ascii letter", "débian", true},
 		{"control char", "deb\x00ian", true},
 		{"underscore", "deb_ian", true},
@@ -257,12 +322,37 @@ func TestValidateDistroName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDistroName(tt.input)
+			err := ValidateDistroName(tt.input)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestSplitSuiteKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantDistro string
+		wantSuite  string
+		wantOK     bool
+	}{
+		{"plain", "debian/bookworm", "debian", "bookworm", true},
+		{"namespaced", "customer/acme/stable", "customer/acme", "stable", true},
+		{"no slash", "debian", "", "", false},
+		{"empty", "", "", "", false},
+		{"leading slash", "/bookworm", "", "", false},
+		{"trailing slash", "debian/", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, s, ok := splitSuiteKey(tt.input)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantDistro, d)
+			assert.Equal(t, tt.wantSuite, s)
 		})
 	}
 }

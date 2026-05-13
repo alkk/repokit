@@ -497,3 +497,21 @@ func TestVerifyUnscopedSkipsRowsForUnconfiguredDistro(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, bodyBefore, bodyAfter, "raspbian pool file contents must be unchanged")
 }
+
+// TestVerifyAcceptsNamespacedDistro covers the Task 3 repointing of verify's
+// --distro validator. With distros: [customer/acme] declared and a matching
+// row in the DB, `verify --distro customer/acme` must pass validateDistroScope
+// and requireConfiguredDistro, then check the namespaced pool file.
+func TestVerifyAcceptsNamespacedDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	appendTestDistros(t, tmpState, "customer/acme")
+
+	pkg := fakePackage(t, tmpPublic, "customer/acme", "stable", "amd64", "hello", "1.0")
+	insertPackage(t, tmpState, pkg)
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "customer/acme")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "verify: ok")
+}

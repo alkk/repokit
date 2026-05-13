@@ -118,13 +118,13 @@ Three small surgical changes, each isolated to its own file/package:
 - Modify: `pkg/config/config.go`
 - Modify: `pkg/config/config_test.go`
 
-- [ ] extract a `validateDistroSegment(name string) error` (unexported) helper holding the current per-segment alphabet rules; used by both validation paths.
-- [ ] rename `validateDistroName` to **exported** `ValidateDistroName` so `pkg/cli` can call it (it already imports `pkg/config`). Update internal callers in `pkg/config`.
-- [ ] rewrite `ValidateDistroName` to accept either a single plain segment or exactly two plain segments joined by one `/`; reject depth ≥ 3, empty halves, and dot segments.
-- [ ] change `splitSuiteKey` to use `strings.LastIndex(key, "/")` so namespaced distros parse correctly; keep the "both halves non-empty, right half no `/`" invariant.
-- [ ] add table-driven cases to `TestValidateDistroName` for: valid `customer/acme`; invalid `customer/acme/extra`, `/acme`, `customer/`, `customer//acme`, `customer/.`, `customer/..`, `customer/-acme`, `-customer/acme`.
-- [ ] add suite-key test cases: positive `customer/acme/stable` → (`customer/acme`, `stable`); positive `SuiteOrDefault("customer/acme", "stable")` round-trip against a loaded config; negative `customer/acme/stable/extra` rejected by `Load` (rejection should come from the distro validator on the left half — assert the error message mentions `customer/acme/stable`).
-- [ ] run `go test ./pkg/config/... -race -count=1` — must pass before next task.
+- [x] extract a `validateDistroSegment(name string) error` (unexported) helper holding the current per-segment alphabet rules; used by both validation paths.
+- [x] rename `validateDistroName` to **exported** `ValidateDistroName` so `pkg/cli` can call it (it already imports `pkg/config`). Update internal callers in `pkg/config`.
+- [x] rewrite `ValidateDistroName` to accept either a single plain segment or exactly two plain segments joined by one `/`; reject depth ≥ 3, empty halves, and dot segments.
+- [x] change `splitSuiteKey` to use `strings.LastIndex(key, "/")` so namespaced distros parse correctly; keep the "both halves non-empty, right half no `/`" invariant.
+- [x] add table-driven cases to `TestValidateDistroName` for: valid `customer/acme`; invalid `customer/acme/extra`, `/acme`, `customer/`, `customer//acme`, `customer/.`, `customer/..`, `customer/-acme`, `-customer/acme`.
+- [x] add suite-key test cases: positive `customer/acme/stable` → (`customer/acme`, `stable`); positive `SuiteOrDefault("customer/acme", "stable")` round-trip against a loaded config; negative `customer/acme/stable/extra` rejected by `Load` (rejection should come from the distro validator on the left half — assert the error message mentions `customer/acme/stable`).
+- [x] run `go test ./pkg/config/... -race -count=1` — must pass before next task.
 
 ### Task 2: Add prefix-conflict check in `config.Load`
 
@@ -132,12 +132,12 @@ Three small surgical changes, each isolated to its own file/package:
 - Modify: `pkg/config/config.go`
 - Modify: `pkg/config/config_test.go`
 
-- [ ] after the duplicate-distro check in `Load`, iterate the configured `Distros` and reject any namespaced entry `a/b` whose first segment `a` is also present as a plain entry in the full distros set. Check is set-based so YAML ordering is irrelevant.
-- [ ] error message names both offending entries (`customer` and `customer/acme`) so the operator can fix `config.yaml` in one edit.
-- [ ] test: `distros: [customer, customer/acme]` → load fails with an error mentioning both entries.
-- [ ] test: `distros: [customer/acme, customer]` (reversed YAML order) → same rejection, same error substring, confirming order-independence.
-- [ ] test: `distros: [customer/acme, customer/beta]` (two siblings under same prefix, no plain `customer`) → loads cleanly.
-- [ ] run `go test ./pkg/config/... -race -count=1` — must pass before next task.
+- [x] after the duplicate-distro check in `Load`, iterate the configured `Distros` and reject any namespaced entry `a/b` whose first segment `a` is also present as a plain entry in the full distros set. Check is set-based so YAML ordering is irrelevant.
+- [x] error message names both offending entries (`customer` and `customer/acme`) so the operator can fix `config.yaml` in one edit.
+- [x] test: `distros: [customer, customer/acme]` → load fails with an error mentioning both entries.
+- [x] test: `distros: [customer/acme, customer]` (reversed YAML order) → same rejection, same error substring, confirming order-independence.
+- [x] test: `distros: [customer/acme, customer/beta]` (two siblings under same prefix, no plain `customer`) → loads cleanly.
+- [x] run `go test ./pkg/config/... -race -count=1` — must pass before next task.
 
 ### Task 3: Introduce `validateDistroScope` / `requireDistroScope` and repoint every distro call site
 
@@ -152,42 +152,42 @@ Three small surgical changes, each isolated to its own file/package:
 
 **Helper additions in `pkg/cli/root.go`:**
 
-- [ ] add `validateDistroScope(val string) error` that calls `config.ValidateDistroName(val)` (exported in Task 1) and re-wraps the error to include `--distro` quoting consistent with `validateScopeName`'s error style.
-- [ ] add `requireDistroScope(val string) error` that adds the empty-string check (parallel to `requireScopeName`).
-- [ ] keep `validateScopeName`/`requireScopeName` bodies unchanged — they continue to reject `/` for suite/component/arch.
-- [ ] update `--distro` flag `description:` tags on each subcommand's options struct (`AddCmd`, `DeleteCmd`, `PublishCmd`, `VerifyCmd`, `InfoCmd`) to mention the namespaced form, e.g. `"distro name (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)"`. `ListCmd` / `SearchCmd` `--distro` description may also be updated for consistency but no validation is added (see Solution Overview).
+- [x] add `validateDistroScope(val string) error` that calls `config.ValidateDistroName(val)` (exported in Task 1) and re-wraps the error to include `--distro` quoting consistent with `validateScopeName`'s error style.
+- [x] add `requireDistroScope(val string) error` that adds the empty-string check (parallel to `requireScopeName`).
+- [x] keep `validateScopeName`/`requireScopeName` bodies unchanged — they continue to reject `/` for suite/component/arch.
+- [x] update `--distro` flag `description:` tags on each subcommand's options struct (`AddCmd`, `DeleteCmd`, `PublishCmd`, `VerifyCmd`, `InfoCmd`) to mention the namespaced form, e.g. `"distro name (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)"`. `ListCmd` / `SearchCmd` `--distro` description may also be updated for consistency but no validation is added (see Solution Overview).
 
 **Call sites to repoint (enumerated from `grep -n 'validateScopeName\|requireScopeName' pkg/cli/*.go | grep -v _test.go`):**
 
-- [ ] `pkg/cli/add.go:50` — inside the `for field, val := range map{fieldDistro: cmd.Distro, fieldSuite: cmd.Suite, "component": cmd.Component}` loop, special-case `field == fieldDistro` to call `requireDistroScope(val)`; other fields keep `requireScopeName(field, val)`. (Same pattern in delete and info — see below.)
-- [ ] `pkg/cli/delete.go:87` — same special-case in the `requireScopeName` map loop.
-- [ ] `pkg/cli/info.go:37` — same special-case in the `validateScopeName` map loop (info uses validate, not require, because all its scope fields are optional).
-- [ ] `pkg/cli/publish.go:57` — replace `validateScopeName(fieldDistro, cmd.Distro)` with `validateDistroScope(cmd.Distro)`.
-- [ ] `pkg/cli/publish.go:515` — **critical**: replace `validateScopeName(fieldDistro, sc.distro)` inside `dbScopes` with `validateDistroScope(sc.distro)`. Without this, no-arg `publish` silently skips every namespaced-distro row in the packages table (the `continue` on line 516 has no log line). Suite check on line 518 stays.
-- [ ] `pkg/cli/verify.go:83` — replace `validateScopeName(fieldDistro, cmd.Distro)` with `validateDistroScope(cmd.Distro)`. Empty `cmd.Distro` is fine — `validateDistroScope` accepts empty just like `validateScopeName` does.
+- [x] `pkg/cli/add.go:50` — inside the `for field, val := range map{fieldDistro: cmd.Distro, fieldSuite: cmd.Suite, "component": cmd.Component}` loop, special-case `field == fieldDistro` to call `requireDistroScope(val)`; other fields keep `requireScopeName(field, val)`. (Same pattern in delete and info — see below.)
+- [x] `pkg/cli/delete.go:87` — same special-case in the `requireScopeName` map loop.
+- [x] `pkg/cli/info.go:37` — same special-case in the `validateScopeName` map loop (info uses validate, not require, because all its scope fields are optional).
+- [x] `pkg/cli/publish.go:57` — replace `validateScopeName(fieldDistro, cmd.Distro)` with `validateDistroScope(cmd.Distro)`.
+- [x] `pkg/cli/publish.go:515` — **critical**: replace `validateScopeName(fieldDistro, sc.distro)` inside `dbScopes` with `validateDistroScope(sc.distro)`. Without this, no-arg `publish` silently skips every namespaced-distro row in the packages table (the `continue` on line 516 has no log line). Suite check on line 518 stays.
+- [x] `pkg/cli/verify.go:83` — replace `validateScopeName(fieldDistro, cmd.Distro)` with `validateDistroScope(cmd.Distro)`. Empty `cmd.Distro` is fine — `validateDistroScope` accepts empty just like `validateScopeName` does.
 
 **Tests in `pkg/cli/root_test.go`:**
 
-- [ ] `TestValidateDistroScope` table-driven cases parallel to `TestValidateScopeName`: positive plain (`debian`), positive namespaced (`customer/acme`), negative deeper (`customer/acme/extra`), negative leading-slash (`/acme`), negative trailing-slash (`customer/`), negative empty-middle (`customer//acme`), negative leading-dash (`-customer/acme`), negative dot segment (`customer/.`, `customer/..`).
-- [ ] `TestRequireDistroScope` confirms empty-string rejection.
-- [ ] verify the existing `TestValidateScopeName` cases still reject `/` (unchanged semantics for suite/component/arch).
+- [x] `TestValidateDistroScope` table-driven cases parallel to `TestValidateScopeName`: positive plain (`debian`), positive namespaced (`customer/acme`), negative deeper (`customer/acme/extra`), negative leading-slash (`/acme`), negative trailing-slash (`customer/`), negative empty-middle (`customer//acme`), negative leading-dash (`-customer/acme`), negative dot segment (`customer/.`, `customer/..`).
+- [x] `TestRequireDistroScope` confirms empty-string rejection.
+- [x] verify the existing `TestValidateScopeName` cases still reject `/` (unchanged semantics for suite/component/arch).
 
 **Per-call-site sanity tests (added to each command's existing `*_test.go`):**
 
-- [ ] `add_test.go`: existing add tests get a fixture using `distros: [customer/acme]` and an `add --distro customer/acme --suite stable` invocation — assert it succeeds through `requireDistroScope` and `requireConfiguredDistro`.
-- [ ] `publish_test.go`: a unit test that inserts a packages-table row directly via `repo` with `distro=customer/acme` and confirms it appears in `dbScopes` output (the bug fix from line 515). Cover both: (a) a row that should appear, (b) a row with `distro=foo/bar/baz` that should still be filtered out by `validateDistroScope`.
-- [ ] `verify_test.go`: `verify --distro customer/acme` (with the distro configured) reaches `requireConfiguredDistro` instead of being rejected by the scope validator.
-- [ ] `info_test.go`: `info --distro customer/acme --suite stable some.deb` parses scope flags without rejection.
-- [ ] `delete_test.go`: `delete --distro customer/acme --suite stable --package foo` parses scope flags without rejection.
+- [x] `add_test.go`: existing add tests get a fixture using `distros: [customer/acme]` and an `add --distro customer/acme --suite stable` invocation — assert it succeeds through `requireDistroScope` and `requireConfiguredDistro`.
+- [x] `publish_test.go`: a unit test that inserts a packages-table row directly via `repo` with `distro=customer/acme` and confirms it appears in `dbScopes` output (the bug fix from line 515). Cover both: (a) a row that should appear, (b) a row with `distro=foo/bar/baz` that should still be filtered out by `validateDistroScope`.
+- [x] `verify_test.go`: `verify --distro customer/acme` (with the distro configured) reaches `requireConfiguredDistro` instead of being rejected by the scope validator.
+- [x] `info_test.go`: `info --distro customer/acme --suite stable some.deb` parses scope flags without rejection.
+- [x] `delete_test.go`: `delete --distro customer/acme --suite stable --package foo` parses scope flags without rejection.
 
-- [ ] run `go test ./pkg/cli/... -race -count=1` — must pass before next task.
+- [x] run `go test ./pkg/cli/... -race -count=1` — must pass before next task.
 
 ### Task 4: End-to-end integration test for a namespaced distro
 
 **Files:**
 - Modify: `pkg/cli/integration_test.go`
 
-- [ ] add `TestIntegration_NamespacedDistro` (or fold a sub-test into the existing integration suite, matching the file's style) that:
+- [x] add `TestIntegration_NamespacedDistro` (or fold a sub-test into the existing integration suite, matching the file's style) that:
   - inits a repo with `distros: [customer/acme]` and one suite entry `customer/acme/stable` in `config.suites` (or relies on `defaultSuite`);
   - adds a tiny synthesized `.deb` via `add --distro customer/acme --suite stable` (reuse the fixture/helper the existing tests use);
   - **runs `publish` with no `--distro` / `--suite` flags** — this is mandatory so the `dbScopes` path is what selects the scope. A scoped `publish --distro customer/acme --suite stable` would bypass `dbScopes` entirely and not catch the bug fixed in Task 3;
@@ -196,18 +196,18 @@ Three small surgical changes, each isolated to its own file/package:
   - reads `Release` and asserts all five header defaults from `defaultSuite`: `Origin: customer/acme`, `Label: customer/acme`, `Suite: stable`, `Codename: stable`, `Description: customer/acme stable`;
   - asserts the `Packages` files inside `dists/stable/<comp>/binary-<arch>/` reference the pool file with the apt-relative form (no leading `customer/acme/` — that segment comes from the URI base, per `pool.Filename`'s contract);
   - runs `verify` (no flags) and asserts it exits 0.
-- [ ] add a negative case: `add --distro foo/bar` where `foo/bar` is not in `config.distros` fails with the existing `requireConfiguredDistro` error.
-- [ ] run `go test ./pkg/cli/... -race -count=1` — must pass before next task.
+- [x] add a negative case: `add --distro foo/bar` where `foo/bar` is not in `config.distros` fails with the existing `requireConfiguredDistro` error.
+- [x] run `go test ./pkg/cli/... -race -count=1` — must pass before next task.
 
 ### Task 5: Extend `pkg/pool` test for namespaced DiskPath and SafeJoin
 
 **Files:**
 - Modify: `pkg/pool/pool_test.go`
 
-- [ ] extend the existing "different distros yield different disk paths" sub-test with a namespaced case (`DiskPath("customer/acme", filename)` produces `customer/acme/<filename>`).
-- [ ] add a SafeJoin positive case: `<publicDir>/customer/acme/pool/...` resolves inside the public root, no rejection.
-- [ ] add a SafeJoin negative case: a malformed namespaced distro like `customer/..` (or a `..` segment injected via `filename`) is rejected by `SafeJoin`. The guard is what makes the slash-agnostic design safe, so the test must exist.
-- [ ] run `go test ./pkg/pool/... -race -count=1` — must pass before next task.
+- [x] extend the existing "different distros yield different disk paths" sub-test with a namespaced case (`DiskPath("customer/acme", filename)` produces `customer/acme/<filename>`).
+- [x] add a SafeJoin positive case: `<publicDir>/customer/acme/pool/...` resolves inside the public root, no rejection.
+- [x] add a SafeJoin negative case: a malformed namespaced distro like `customer/..` (or a `..` segment injected via `filename`) is rejected by `SafeJoin`. The guard is what makes the slash-agnostic design safe, so the test must exist.
+- [x] run `go test ./pkg/pool/... -race -count=1` — must pass before next task.
 
 ### Task 6: Update docs
 
@@ -215,21 +215,21 @@ Three small surgical changes, each isolated to its own file/package:
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] add one sentence to the `Context.Config` / `Config.Distros` paragraph in CLAUDE.md's Architecture section noting that distros may be plain or one-level namespaced (`customer/acme`), and that plain-prefix conflicts (`[customer, customer/acme]`) are rejected at config load.
-- [ ] add a `customer/<name>` example to the `distros:` block in README.md.
-- [ ] run `make test && make lint` — must pass before final task.
+- [x] add one sentence to the `Context.Config` / `Config.Distros` paragraph in CLAUDE.md's Architecture section noting that distros may be plain or one-level namespaced (`customer/acme`), and that plain-prefix conflicts (`[customer, customer/acme]`) are rejected at config load.
+- [x] add a `customer/<name>` example to the `distros:` block in README.md.
+- [x] run `make test && make lint` — must pass before final task.
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] verify all requirements from Overview are implemented.
-- [ ] verify edge cases handled (depth ≥ 3, empty segments, prefix conflicts in both orderings, dot segments, `dbScopes` filter accepts slashed distros).
-- [ ] run `make test` — all packages green with `-race`.
-- [ ] run `make lint` — no new findings.
-- [ ] manually inspect the generated `Release` file in the integration test artifact to confirm all five header defaults (`Origin`, `Label`, `Suite`, `Codename`, `Description`) are emitted verbatim.
+- [x] verify all requirements from Overview are implemented.
+- [x] verify edge cases handled (depth ≥ 3, empty segments, prefix conflicts in both orderings, dot segments, `dbScopes` filter accepts slashed distros).
+- [x] run `make test` — all packages green with `-race`.
+- [x] run `make lint` — no new findings.
+- [x] manually inspect the generated `Release` file in the integration test artifact to confirm all five header defaults (`Origin`, `Label`, `Suite`, `Codename`, `Description`) are emitted verbatim. (covered by `TestIntegration_NamespacedDistro` `headerValue` assertions on lines 361-365 of `pkg/cli/integration_test.go`; no separate manual step needed)
 
 ### Task 8: [Final] Close out the plan
 
-- [ ] move this plan to `docs/plans/completed/`.
+- [x] move this plan to `docs/plans/completed/`.
 
 ## Post-Completion
 

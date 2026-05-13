@@ -189,6 +189,80 @@ func TestRequireScopeName(t *testing.T) {
 	})
 }
 
+// TestValidateDistroScope mirrors TestValidateScopeName but exercises the
+// namespaced-distro alphabet: a single plain segment or two plain segments
+// joined by exactly one '/'. Suite/component/arch keep their slash-rejecting
+// validator (see TestValidateScopeName) — this test is only about --distro.
+func TestValidateDistroScope(t *testing.T) {
+	cases := []struct {
+		name    string
+		val     string
+		wantErr bool
+	}{
+		{"empty allowed", "", false},
+		{"plain", "debian", false},
+		{"namespaced", "customer/acme", false},
+		{"deeper rejected", "customer/acme/extra", true},
+		{"leading slash rejected", "/acme", true},
+		{"trailing slash rejected", "customer/", true},
+		{"empty middle rejected", "customer//acme", true},
+		{"leading dash rejected", "-customer/acme", true},
+		{"leading dash on right rejected", "customer/-acme", true},
+		{"dot left rejected", "./acme", true},
+		{"dot right rejected", "customer/.", true},
+		{"dotdot right rejected", "customer/..", true},
+		{"control char rejected", "customer/acme\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDistroScope(tc.val)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "--distro",
+					"error message should quote the --distro flag name")
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestRequireDistroScope asserts the empty-string rejection and that
+// non-empty values delegate to validateDistroScope.
+func TestRequireDistroScope(t *testing.T) {
+	t.Run("empty rejected", func(t *testing.T) {
+		err := requireDistroScope("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--distro")
+		assert.Contains(t, err.Error(), "must not be empty")
+	})
+	t.Run("plain accepted", func(t *testing.T) {
+		assert.NoError(t, requireDistroScope("debian"))
+	})
+	t.Run("namespaced accepted", func(t *testing.T) {
+		assert.NoError(t, requireDistroScope("customer/acme"))
+	})
+	t.Run("invalid rejected", func(t *testing.T) {
+		err := requireDistroScope("customer/acme/extra")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--distro")
+	})
+}
+
+// TestValidateScopeNameStillRejectsSlash guards that the suite/component/arch
+// validator did NOT inherit the namespaced acceptance from validateDistroScope.
+// A `/` in any of those fields must still be rejected — they are single path
+// segments under dists/, never a parent namespace.
+func TestValidateScopeNameStillRejectsSlash(t *testing.T) {
+	for _, field := range []string{"suite", "component", "arch"} {
+		t.Run(field, func(t *testing.T) {
+			err := validateScopeName(field, "a/b")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "/")
+		})
+	}
+}
+
 func TestRequireConfiguredDistro(t *testing.T) {
 	configured := &config.Config{Distros: []string{"debian", "ubuntu"}}
 

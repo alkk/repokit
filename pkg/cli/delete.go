@@ -18,7 +18,7 @@ import (
 // wipes. Deleting every version of a named package additionally requires
 // --all-versions as a confirmation guard when --version is omitted.
 type DeleteCmd struct {
-	Distro      string `long:"distro" description:"target distribution" required:"true"`
+	Distro      string `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
 	Suite       string `long:"suite" description:"target suite" required:"true"`
 	Component   string `long:"component" description:"filter by component"`
 	Arch        string `long:"arch" description:"filter by architecture"`
@@ -81,12 +81,11 @@ func (cmd *DeleteCmd) run(c *Context) error {
 // filter, but its message is opaque to the user — surface a friendlier one
 // here.
 func (cmd *DeleteCmd) validate() error {
-	for field, val := range map[string]string{
-		fieldDistro: cmd.Distro, fieldSuite: cmd.Suite,
-	} {
-		if err := requireScopeName(field, val); err != nil {
-			return fmt.Errorf("%w: %w", errDeleteUsage, err)
-		}
+	if err := requireDistroScope(cmd.Distro); err != nil {
+		return fmt.Errorf("%w: %w", errDeleteUsage, err)
+	}
+	if err := requireScopeName(fieldSuite, cmd.Suite); err != nil {
+		return fmt.Errorf("%w: %w", errDeleteUsage, err)
 	}
 	for field, val := range map[string]string{
 		"component": cmd.Component, "arch": cmd.Arch,

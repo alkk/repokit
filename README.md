@@ -150,10 +150,16 @@ are never walked.
 distros:
   - debian
   - ubuntu
+  - customer/acme
 
 signing_key: "DEADBEEF1234..."
 public_dir: "/srv/apt"
 ```
+
+Distro names may be plain (`debian`) or one-level namespaced
+(`customer/acme`), producing a nested
+`<publicDir>/customer/acme/{pool,dists}/` subtree. Depth ≥ 2 slashes is
+rejected, as is a plain-prefix conflict like `[customer, customer/acme]`.
 
 See [docs/usage.md](docs/usage.md) for the full config schema including
 per-suite `Release` header overrides.

@@ -49,14 +49,23 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
   re-calling `loadConfig(c.Root)`. `Config.Distros` is the authoritative list
   of managed distros; `add`, `delete`, `publish`, and `verify` reject
   `--distro` values not in this list via `requireConfiguredDistro` in
-  `root.go`.
+  `root.go`. Distro names may be plain (`debian`) or one-level namespaced
+  (`customer/acme`, producing nested `<publicDir>/customer/acme/{pool,dists}/`);
+  a plain-prefix conflict like `[customer, customer/acme]` is rejected at
+  config load.
 
 Flow of a typical write command (`add`, `delete`, `publish`):
 
 1. `pkg/cli/<cmd>.go` parses flags, validates scope names with
    `validateScopeName` / `requireScopeName` (defends against path traversal
    into `dists/`/`pool/` and against Release-header injection; also reserves
-   `.new`/`.old` suite suffixes for publish staging).
+   `.new`/`.old` suite suffixes for publish staging). `--distro` is the
+   exception: it goes through `validateDistroScope` / `requireDistroScope`
+   (in `root.go`), which delegate to `config.ValidateDistroName` so the
+   one-level namespaced form (`customer/acme`) is accepted while the other
+   scope fields keep `validateScopeName` (which still rejects `/`).
+   `publish`'s `dbScopes` discovery path must use `validateDistroScope` too —
+   `validateScopeName` there would silently drop every namespaced row.
 2. `pkg/repo` opens `repo.db` from `Context.Root` (modernc.org/sqlite, pure
    Go), runs any pending migrations from `pkg/repo/migrate.go`, and exposes
    typed queries in `pkg/repo/queries.go`. All multi-step writes happen
@@ -118,3 +127,8 @@ verify.
 - Managed distros are explicit in `config.yaml`. The public dir may contain
   unrelated top-level directories — repokit never walks them. Adding a new
   distro requires a config edit before `add` will accept it.
+- `config.suites` keys are `<distro>/<suite>` and `splitSuiteKey` cuts on the
+  **last** `/`, so a namespaced distro's per-suite override key has three
+  segments (`customer/acme/stable` → distro `customer/acme`, suite `stable`).
+  The distro half is then re-validated by `ValidateDistroName`, which rejects
+  a left half carrying more than one `/`.

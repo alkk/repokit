@@ -24,7 +24,7 @@ import (
 // PublishCmd rebuilds dists/<distro>/<suite>/ for one or more scopes and signs
 // the resulting Release. It does not touch pool/ or the packages table.
 type PublishCmd struct {
-	Distro string `long:"distro" description:"target distribution (omit with --suite to publish every suite known to the database)"`
+	Distro string `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; omit with --suite to publish every suite known to the database)"`
 	Suite  string `long:"suite" description:"target suite"`
 	NoSign bool   `long:"no-sign" description:"skip signing — produce stub InRelease/Release.gpg via NopSigner"`
 }
@@ -54,7 +54,7 @@ type scope struct {
 }
 
 func (cmd *PublishCmd) run(c *Context) error {
-	if err := validateScopeName(fieldDistro, cmd.Distro); err != nil {
+	if err := validateDistroScope(cmd.Distro); err != nil {
 		return err
 	}
 	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
@@ -512,7 +512,7 @@ func dbScopes(ctx context.Context, r *repo.Repo) ([]scope, error) {
 		if err := rows.Scan(&sc.distro, &sc.suite); err != nil {
 			return nil, fmt.Errorf("scanning scope: %w", err)
 		}
-		if validateScopeName(fieldDistro, sc.distro) != nil {
+		if validateDistroScope(sc.distro) != nil {
 			continue
 		}
 		if validateScopeName(fieldSuite, sc.suite) != nil {

@@ -27,7 +27,7 @@ import (
 // collects pool files that have no DB row. It never removes DB rows that point
 // at a missing pool file — that resolution requires a manual decision.
 type VerifyCmd struct {
-	Distro string `long:"distro" description:"limit verification to one distribution"`
+	Distro string `long:"distro" description:"limit verification to one distribution (plain like 'debian' or namespaced like 'customer/acme')"`
 	Suite  string `long:"suite" description:"limit verification to one suite (requires --distro)"`
 	GC     bool   `long:"gc" description:"remove orphan pool files (files with no database row)"`
 }
@@ -80,7 +80,7 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 	if cmd.Suite != "" && cmd.Distro == "" {
 		return nil, errors.New("--suite requires --distro")
 	}
-	if err := validateScopeName(fieldDistro, cmd.Distro); err != nil {
+	if err := validateDistroScope(cmd.Distro); err != nil {
 		return nil, err
 	}
 	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
