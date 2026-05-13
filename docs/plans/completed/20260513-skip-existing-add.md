@@ -192,16 +192,16 @@ reader doesn't try to surface the error.
 - Modify: `pkg/cli/add.go`
 - Modify: `pkg/cli/add_test.go`
 
-- [ ] add `SkipExisting bool` field to `AddCmd` with the long flag and
+- [x] add `SkipExisting bool` field to `AddCmd` with the long flag and
       description spelled out in Technical Details
-- [ ] add the `cmd.SkipExisting && cmd.Replace` mutual-exclusion check in
+- [x] add the `cmd.SkipExisting && cmd.Replace` mutual-exclusion check in
       `run`, sibling of the existing `--replace` batch check
-- [ ] add a test case `skip-existing + replace rejected` in `add_test.go`:
+- [x] add a test case `skip-existing + replace rejected` in `add_test.go`:
       invoke `add --skip-existing --replace <one-deb>`, assert `ExitError`,
       stderr contains `--skip-existing and --replace are mutually exclusive`,
       no DB rows inserted, no pool files written
-- [ ] run `make test` (race + coverage) — must pass before next task
-- [ ] run `make lint` — must be clean
+- [x] run `make test` (race + coverage) — must pass before next task
+- [x] run `make lint` — must be clean
 
 ### Task 2: Wire `--skip-existing` end-to-end (sentinel, helper, run loop)
 
@@ -215,46 +215,46 @@ callback would roll back the entire transaction.
 - Modify: `pkg/cli/add.go`
 - Modify: `pkg/cli/add_test.go`
 
-- [ ] declare `var errSkipped = errors.New("skipped")` at package scope
+- [x] declare `var errSkipped = errors.New("skipped")` at package scope
       in `add.go`
-- [ ] add the `reportSkip` method on `*AddCmd` per the Technical Details
+- [x] add the `reportSkip` method on `*AddCmd` per the Technical Details
       shape (SHA256-mismatch branch + plain-skip fallback), with a brief
       comment that the degraded-to-plain-line behaviour on `r.Get` failure
       is intentional
-- [ ] in `processOne`, extend the `errors.Is(ierr, repo.ErrDuplicate)`
+- [x] in `processOne`, extend the `errors.Is(ierr, repo.ErrDuplicate)`
       branch to check `cmd.SkipExisting` and route through `reportSkip` +
       return `errSkipped`
-- [ ] in `run`, declare `var skipped int` next to `written`, and in the
+- [x] in `run`, declare `var skipped int` next to `written`, and in the
       per-deb loop inside `r.Tx` add the `errors.Is(perr, errSkipped)`
       branch that increments `skipped` and `continue`s (inside the loop
       body, not in the `r.Tx` return path)
-- [ ] update the trailing summary in `run` to subtract `skipped` from the
+- [x] update the trailing summary in `run` to subtract `skipped` from the
       package count and conditionally append `, skipped M`
-- [ ] add test case `skip-existing on identical re-add`: add the same .deb
+- [x] add test case `skip-existing on identical re-add`: add the same .deb
       twice (second invocation with `--skip-existing`); assert ExitOK,
       stderr has `skipping <name>_<ver>_<arch>: already present in ...`,
       stdout has `staged 0 packages, skipped 1`, DB row count unchanged
-- [ ] add test case `skip-existing no collisions`: invoke
+- [x] add test case `skip-existing no collisions`: invoke
       `add --skip-existing <new-deb>`; assert ExitOK, no `skipping` line
       on stderr, stdout summary has no `, skipped` suffix, row inserted
-- [ ] add test case `skip-existing all skipped`: pre-populate two NVRAs,
+- [x] add test case `skip-existing all skipped`: pre-populate two NVRAs,
       then run `add --skip-existing <both>` (batch of 2); assert ExitOK,
       stdout has `staged 0 packages, skipped 2`, no new files appear in
       the public dir (compare a `filepath.Walk` snapshot of `tmpPublic`
       before/after)
-- [ ] add test case `skip-existing under --quiet`: pre-populate one NVRA,
+- [x] add test case `skip-existing under --quiet`: pre-populate one NVRA,
       then run `add --skip-existing --quiet <existing-deb>`; assert ExitOK,
       stdout is empty (no summary), stderr still contains
       `skipping ...: already present`
-- [ ] run `make test` — must pass before next task
-- [ ] run `make lint` — must be clean
+- [x] run `make test` — must pass before next task
+- [x] run `make lint` — must be clean
 
 ### Task 3: Test mixed-batch and SHA256-mismatch branches
 
 **Files:**
 - Modify: `pkg/cli/add_test.go`
 
-- [ ] add test case `skip-existing mixed batch`: pre-populate one NVRA,
+- [x] add test case `skip-existing mixed batch`: pre-populate one NVRA,
       then invoke `add --skip-existing <existing-deb> <new-deb-a> <new-deb-b>`
       (batch of 3, picking three distinct fixtures from
       `pkg/deb/testdata/` whose NVRAs are distinct — verify the
@@ -262,7 +262,7 @@ callback would roll back the entire transaction.
       ExitOK, exactly one `skipping` line on stderr, stdout summary
       `staged 2 packages, skipped 1`, two new pool files on disk for the
       non-skipped entries
-- [ ] add test case `skip-existing on NVRA collision with different bytes`
+- [x] add test case `skip-existing on NVRA collision with different bytes`
       using the synthetic-row trick: open the SQLite DB directly via
       `repo.Open`, `Tx`-insert a `repo.Package` row with the real .deb's
       NVRA but a fake SHA256 and a placeholder `Filename` (a synthetic
@@ -275,28 +275,28 @@ callback would roll back the entire transaction.
       overwritten), and no new pool file is written for the synthetic
       Filename. Also run the same scenario with `--quiet` and assert the
       warning still fires on stderr.
-- [ ] run `make test` — must pass before next task
-- [ ] run `make lint` — must be clean
+- [x] run `make test` — must pass before next task
+- [x] run `make lint` — must be clean
 
 ### Task 4: Verify acceptance criteria
-- [ ] verify all requirements from Overview are implemented: flag exists,
+- [x] verify all requirements from Overview are implemented: flag exists,
       NVRA-match semantics, mismatch warning, mutual exclusion, no
       batch-size limit, summary suffix, quiet behaviour
-- [ ] spot-check that existing regression coverage is intact: plain `add`
+- [x] spot-check that existing regression coverage is intact: plain `add`
       duplicate still aborts with `already exists ... use --replace`;
       `--replace` single-deb still works; `--replace` >1 batch still
       rejected. Add minimal coverage for any branch that turns out to be
       uncovered
-- [ ] run full test suite: `make test`
-- [ ] confirm `make lint` is clean
-- [ ] manually run `repokit add --help` and confirm the new flag's
+- [x] run full test suite: `make test`
+- [x] confirm `make lint` is clean
+- [x] manually run `repokit add --help` and confirm the new flag's
       description renders correctly
 
 ### Task 5: [Final] Update documentation and move plan
-- [ ] update `CLAUDE.md` only if a new convention surfaced during
+- [x] update `CLAUDE.md` only if a new convention surfaced during
       implementation (likely not — the change is local to existing
       patterns)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 

@@ -90,7 +90,7 @@ Mutates `repo.db` and `pool/` only — running `publish` afterwards is required
 to update the apt indexes.
 
 ```
-repokit add --distro <d> --suite <s> [--component <c>] [--replace] <deb>...
+repokit add --distro <d> --suite <s> [--component <c>] [--replace | --skip-existing] <deb>...
 ```
 
 | Flag | Required | Default | Description |
@@ -99,16 +99,29 @@ repokit add --distro <d> --suite <s> [--component <c>] [--replace] <deb>...
 | `--suite <s>` | yes | — | target suite (e.g. `bookworm`) |
 | `--component <c>` | no | `main` | target component |
 | `--replace` | no | off | overwrite an existing same-NVRA package |
+| `--skip-existing` | no | off | skip packages whose name/version/architecture is already present in the target (mutually exclusive with `--replace`) |
 
 The whole batch is wrapped in a single transaction. On any failure (duplicate
-without `--replace`, parse error, I/O error) the database rolls back and pool
-files written earlier in the batch are deleted in reverse order.
+without `--replace` or `--skip-existing`, parse error, I/O error) the database
+rolls back and pool files written earlier in the batch are deleted in reverse
+order.
 
 `--replace` accepts only a single `.deb` per invocation, since overwriting a
 pool file cannot be safely rolled back if a later item in the batch fails.
 
-A duplicate without `--replace` prints the existing-vs-new sha256 diff before
-exiting with code 1.
+A duplicate without `--replace` or `--skip-existing` prints the existing-vs-new
+sha256 diff before exiting with code 1.
+
+`--skip-existing` makes batch re-adds idempotent: each duplicate NVRA is logged
+on stderr as `skipping <name>_<ver>_<arch>: already present in
+<distro>/<suite>/<component>` and the batch continues. The summary becomes
+`staged N packages, skipped M` when any were skipped. When the duplicate NVRA's
+stored sha256 differs from the incoming `.deb`'s sha256, the line is upgraded
+to `warning: skipping ...: NVRA matches but sha256 differs (existing=<sha>
+new=<sha>) — use --replace to overwrite` so "same NVRA, different bytes"
+footguns surface even under `--quiet` (the warning stays on stderr; only the
+trailing stdout summary is suppressed). `--skip-existing` and `--replace`
+cannot be combined.
 
 A `.deb` whose `control.tar.*` `control` member is larger than 1 MiB or
 contains an embedded blank line (which would split into multiple stanzas in

@@ -18,14 +18,19 @@ import (
 	flags "github.com/jessevdk/go-flags"
 )
 
+// errSkipped flags a per-deb skip in --skip-existing mode so the surrounding
+// loop can advance without rolling back the transaction.
+var errSkipped = errors.New("skipped")
+
 // AddCmd stages one or more .deb packages into the (distro, suite, component)
 // target. It only mutates the database and the pool tree; publishing the
 // dists/ index requires a separate `repokit publish` invocation.
 type AddCmd struct {
-	Distro    DistroName `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
-	Suite     string     `long:"suite" description:"target suite (e.g. bookworm)" required:"true"`
-	Component string     `long:"component" default:"main" description:"target component"`
-	Replace   bool       `long:"replace" description:"overwrite an existing package with the same name/version/architecture"`
+	Distro       DistroName `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
+	Suite        string     `long:"suite" description:"target suite (e.g. bookworm)" required:"true"`
+	Component    string     `long:"component" default:"main" description:"target component"`
+	Replace      bool       `long:"replace" description:"overwrite an existing package with the same name/version/architecture"`
+	SkipExisting bool       `long:"skip-existing" description:"skip packages whose name/version/architecture is already present in the target (mutually exclusive with --replace)"`
 
 	Args struct {
 		Debs []flags.Filename `positional-arg-name:"deb" required:"1"`
@@ -41,10 +46,10 @@ func (cmd *AddCmd) Execute(c *Context) int {
 	return ExitOK
 }
 
-// run wraps the whole batch in a single SQLite transaction. On any failure
-// the DB rolls back and pool files written earlier in the batch are deleted
-// in reverse order to keep the on-disk tree consistent with the DB.
-func (cmd *AddCmd) run(c *Context) error {
+// validate enforces the flag-level invariants before any I/O — scope-name
+// safety, configured-distro lookup, and the mutual-exclusion / batch-size
+// constraints around --replace and --skip-existing.
+func (cmd *AddCmd) validate(c *Context) error {
 	if err := requireDistroScope(string(cmd.Distro)); err != nil {
 		return err
 	}
@@ -58,8 +63,21 @@ func (cmd *AddCmd) run(c *Context) error {
 	if err := requireConfiguredDistro(c.Config, string(cmd.Distro)); err != nil {
 		return err
 	}
+	if cmd.SkipExisting && cmd.Replace {
+		return errors.New("--skip-existing and --replace are mutually exclusive")
+	}
 	if cmd.Replace && len(cmd.Args.Debs) > 1 {
 		return errors.New("--replace accepts only a single .deb argument (a failed batch with --replace cannot safely roll back overwritten pool files)")
+	}
+	return nil
+}
+
+// run wraps the whole batch in a single SQLite transaction. On any failure
+// the DB rolls back and pool files written earlier in the batch are deleted
+// in reverse order to keep the on-disk tree consistent with the DB.
+func (cmd *AddCmd) run(c *Context) error {
+	if err := cmd.validate(c); err != nil {
+		return err
 	}
 
 	ctx := context.Background()
@@ -78,10 +96,15 @@ func (cmd *AddCmd) run(c *Context) error {
 	var written []string
 	var backups []string
 	var staleReplaced []string
+	var skipped int
 	txErr := r.Tx(ctx, func(tx *sql.Tx) error {
 		for _, p := range cmd.Args.Debs {
 			diskPath, backup, stale, perr := cmd.processOne(ctx, c, r, tx, string(p))
 			if perr != nil {
+				if errors.Is(perr, errSkipped) {
+					skipped++
+					continue
+				}
 				return perr
 			}
 			written = append(written, diskPath)
@@ -126,9 +149,13 @@ func (cmd *AddCmd) run(c *Context) error {
 	}
 
 	if !c.Quiet {
+		msg := fmt.Sprintf("staged %d packages", len(cmd.Args.Debs)-skipped)
+		if skipped > 0 {
+			msg += fmt.Sprintf(", skipped %d", skipped)
+		}
 		fmt.Fprintf(c.Stdout,
-			"staged %d packages in %s/%s — run 'repokit publish --distro %s --suite %s' to release\n",
-			len(cmd.Args.Debs), string(cmd.Distro), cmd.Suite, string(cmd.Distro), cmd.Suite)
+			"%s in %s/%s — run 'repokit publish --distro %s --suite %s' to release\n",
+			msg, string(cmd.Distro), cmd.Suite, string(cmd.Distro), cmd.Suite)
 	}
 	return nil
 }
@@ -191,6 +218,10 @@ func (cmd *AddCmd) processOne(
 
 	if ierr := r.Insert(ctx, tx, pkg); ierr != nil {
 		if errors.Is(ierr, repo.ErrDuplicate) {
+			if cmd.SkipExisting {
+				cmd.reportSkip(ctx, c, r, tx, &pkg)
+				return "", "", "", errSkipped
+			}
 			cmd.printDuplicateDiff(ctx, c, r, tx, &pkg)
 			return "", "", "", fmt.Errorf("%s_%s_%s already exists in %s/%s/%s (use --replace to overwrite)",
 				pkg.Name, pkg.Version, pkg.Architecture,
@@ -276,6 +307,28 @@ func destMatchesSHA256(path, want string) (bool, error) {
 		return false, fmt.Errorf("hashing %s: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)) == want, nil
+}
+
+// reportSkip emits the stderr notice for a --skip-existing collision. When the
+// existing DB row's SHA256 differs from the incoming .deb's, it switches to a
+// loud warning so operators notice "same NVRA, different bytes" footguns. A
+// failed r.Get is intentionally treated as a benign anomaly (r.Insert just
+// proved the NVRA exists in this same tx, so a read miss is harmless) and
+// degrades to the plain skip line rather than surfacing as an error.
+func (cmd *AddCmd) reportSkip(
+	ctx context.Context, c *Context, r *repo.Repo, tx *sql.Tx, pkg *repo.Package,
+) {
+	existing, err := r.Get(ctx, tx, pkg.Distro, pkg.Suite, pkg.Component,
+		pkg.Architecture, pkg.Name, pkg.Version)
+	if err == nil && existing != nil && existing.SHA256 != pkg.SHA256 {
+		fmt.Fprintf(c.Stderr,
+			"warning: skipping %s_%s_%s: NVRA matches but sha256 differs (existing=%s new=%s) — use --replace to overwrite\n",
+			pkg.Name, pkg.Version, pkg.Architecture, existing.SHA256, pkg.SHA256)
+		return
+	}
+	fmt.Fprintf(c.Stderr, "skipping %s_%s_%s: already present in %s/%s/%s\n",
+		pkg.Name, pkg.Version, pkg.Architecture,
+		pkg.Distro, pkg.Suite, pkg.Component)
 }
 
 // printDuplicateDiff emits the existing-vs-new sha256 diff for a duplicate

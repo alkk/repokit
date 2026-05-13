@@ -627,6 +627,291 @@ func TestAddAcceptsNamespacedDistro(t *testing.T) {
 	assert.Equal(t, 1, rowCount(t, tmpState))
 }
 
+// TestAddRejectsSkipExistingWithReplace guards the mutual-exclusion check at
+// flag-validation time: --skip-existing and --replace encode opposite intents
+// (leave collisions alone vs. overwrite them) and must never be combined.
+func TestAddRejectsSkipExistingWithReplace(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm",
+		"--skip-existing", "--replace",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Contains(t, stderr.String(), "--skip-existing and --replace are mutually exclusive")
+	assert.Equal(t, 0, rowCount(t, tmpState))
+	assert.Empty(t, listPoolFiles(t, tmpPublic))
+}
+
+// TestAddSkipExistingIdenticalReAdd covers the happy path: re-adding the same
+// .deb under --skip-existing must succeed, emit the plain skip line on stderr,
+// keep the row count unchanged, and report `staged 0 packages, skipped 1`.
+func TestAddSkipExistingIdenticalReAdd(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	addOnce(t, tmpState, tmpPublic, deb)
+	require.Equal(t, 1, rowCount(t, tmpState))
+
+	poolPath := filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
+	require.FileExists(t, poolPath)
+	preSHA := fileSHA256(t, poolPath)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stderr.String(),
+		"skipping hello-gz_1.0_amd64: already present in debian/bookworm/main")
+	assert.Contains(t, stdout.String(), "staged 0 packages, skipped 1")
+	assert.Equal(t, 1, rowCount(t, tmpState), "DB row count must be unchanged on skip")
+	assert.FileExists(t, poolPath, "skip must not delete the pre-existing pool file")
+	assert.Equal(t, preSHA, fileSHA256(t, poolPath),
+		"skip must not rewrite the pre-existing pool file")
+}
+
+// TestAddSkipExistingNoCollisions covers the no-op path: --skip-existing on a
+// fresh NVRA behaves like a plain add — no `skipping` line, no `skipped` in
+// the summary, row inserted.
+func TestAddSkipExistingNoCollisions(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.NotContains(t, stderr.String(), "skipping")
+	assert.Regexp(t, `\bstaged 1 packages\b`, stdout.String())
+	assert.NotContains(t, stdout.String(), "skipped")
+	assert.Equal(t, 1, rowCount(t, tmpState))
+}
+
+// TestAddSkipExistingAllSkipped pre-populates two NVRAs and re-adds them both
+// under --skip-existing in a single batch. No new pool files must appear on
+// disk between before/after snapshots.
+func TestAddSkipExistingAllSkipped(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb1 := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	deb2 := fixtureDeb(t, "hello-xz_1.0_amd64.deb")
+	addOnce(t, tmpState, tmpPublic, deb1)
+	addOnce(t, tmpState, tmpPublic, deb2)
+	require.Equal(t, 2, rowCount(t, tmpState))
+
+	before := listPoolFiles(t, tmpPublic)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
+		deb1, deb2,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "staged 0 packages, skipped 2")
+	assert.Equal(t, 2, rowCount(t, tmpState))
+
+	after := listPoolFiles(t, tmpPublic)
+	assert.ElementsMatch(t, before, after,
+		"no new pool files should appear when every package is skipped")
+}
+
+// TestAddSkipExistingUnderQuiet asserts that --quiet suppresses the trailing
+// summary but the per-skip stderr line still fires.
+func TestAddSkipExistingUnderQuiet(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	addOnce(t, tmpState, tmpPublic, deb)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "--quiet", "add",
+		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Empty(t, stdout.String(), "--quiet must suppress the summary")
+	assert.Contains(t, stderr.String(),
+		"skipping hello-gz_1.0_amd64: already present in debian/bookworm/main")
+}
+
+// TestAddSkipExistingMixedBatch covers the per-deb branch in the run loop:
+// a batch where one NVRA is already present and the rest are fresh must skip
+// the duplicate with a single stderr notice and still insert the other two,
+// writing exactly the new pool files on disk.
+func TestAddSkipExistingMixedBatch(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	existing := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	newA := fixtureDeb(t, "hello-xz_1.0_amd64.deb")
+	newB := fixtureDeb(t, "hello-zst_1.0_amd64.deb")
+	addOnce(t, tmpState, tmpPublic, existing)
+	require.Equal(t, 1, rowCount(t, tmpState))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
+		existing, newA, newB,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+	assert.Equal(t, 1, strings.Count(stderr.String(), "skipping "),
+		"mixed batch must produce exactly one skip notice on stderr")
+	assert.Contains(t, stderr.String(),
+		"skipping hello-gz_1.0_amd64: already present in debian/bookworm/main")
+	assert.Contains(t, stdout.String(), "staged 2 packages, skipped 1")
+	assert.Equal(t, 3, rowCount(t, tmpState), "two new rows inserted on top of the existing one")
+
+	assert.FileExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/h/hello/hello-xz_1.0_amd64.deb")))
+	assert.FileExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")))
+}
+
+// TestAddSkipExistingBatchRollbackOnNonSkipError covers the error-path
+// distinction between errSkipped and any other processOne error inside the
+// per-deb loop. A mid-batch failure (here: a bogus .deb after one skip + one
+// successful insert) must still roll the whole transaction back and remove
+// pool files written earlier in the same batch — only errSkipped advances the
+// loop. If a refactor ever swallowed non-skip errors under --skip-existing,
+// the row inserted before the failure would survive and this test would
+// catch it.
+func TestAddSkipExistingBatchRollbackOnNonSkipError(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	existing := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	good := fixtureDeb(t, "hello-xz_1.0_amd64.deb")
+	missing := filepath.Join(t.TempDir(), "definitely-missing.deb")
+	addOnce(t, tmpState, tmpPublic, existing)
+	require.Equal(t, 1, rowCount(t, tmpState))
+	before := listPoolFiles(t, tmpPublic)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
+		existing, good, missing,
+	}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitError, code)
+	assert.Equal(t, 1, rowCount(t, tmpState),
+		"non-skip error must roll back the in-batch insert; only the pre-existing row remains")
+	assert.ElementsMatch(t, before, listPoolFiles(t, tmpPublic),
+		"non-skip error must roll back pool files written earlier in the batch")
+}
+
+// TestAddSkipExistingMismatchedSHA covers the SHA256-mismatch branch of
+// reportSkip: when a row already exists at the target NVRA but its stored
+// SHA256 differs from the incoming .deb, --skip-existing must emit the loud
+// `warning: skipping ... NVRA matches but sha256 differs` line (with both
+// hash fragments) on stderr, leave the existing row's SHA256 untouched, and
+// write no pool file. The synthetic-row trick avoids needing a fixture whose
+// NVRA matches but bytes don't — reportSkip only reads the DB row's SHA256
+// and never touches the filesystem, so a placeholder Filename is fine. The
+// --quiet subtest asserts the warning still fires under --quiet because it is
+// a diagnostic, not a summary line.
+func TestAddSkipExistingMismatchedSHA(t *testing.T) {
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	realSHA := fileSHA256(t, deb)
+
+	const fakeSHA = "1111111111111111111111111111111111111111111111111111111111111111"
+	const syntheticFilename = "pool/bookworm/main/h/hello-gz/synthetic_hello-gz_1.0_amd64.deb"
+
+	cases := []struct {
+		name  string
+		quiet bool
+	}{
+		{name: "default"},
+		{name: "quiet", quiet: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpState := t.TempDir()
+			tmpPublic := t.TempDir()
+			initRepoForTest(t, tmpState)
+			insertPackage(t, tmpState, repo.Package{
+				Distro:       "debian",
+				Suite:        "bookworm",
+				Component:    "main",
+				Architecture: "amd64",
+				Name:         "hello-gz",
+				Version:      "1.0",
+				Filename:     syntheticFilename,
+				Size:         11,
+				MD5:          "00000000000000000000000000000000",
+				SHA1:         "0000000000000000000000000000000000000000",
+				SHA256:       fakeSHA,
+				SHA512:       strings.Repeat("0", 128),
+				Control:      "Package: hello-gz\nVersion: 1.0\nArchitecture: amd64\n",
+			})
+			require.Equal(t, 1, rowCount(t, tmpState))
+
+			realPool := filepath.Join(tmpPublic, filepath.FromSlash(
+				"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
+			syntheticPool := filepath.Join(tmpPublic, filepath.FromSlash(
+				"debian/"+syntheticFilename))
+
+			args := []string{"--repo", tmpState, "--public", tmpPublic}
+			if tc.quiet {
+				args = append(args, "--quiet")
+			}
+			args = append(args, "add",
+				"--distro", "debian", "--suite", "bookworm", "--skip-existing", deb)
+
+			var stdout, stderr bytes.Buffer
+			code := Run(args, &stdout, &stderr, "test-rev")
+			require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+
+			assert.Contains(t, stderr.String(), "warning: skipping hello-gz_1.0_amd64")
+			assert.Contains(t, stderr.String(), "NVRA matches but sha256 differs")
+			assert.Contains(t, stderr.String(), "existing="+fakeSHA)
+			assert.Contains(t, stderr.String(), "new="+realSHA)
+			assert.NotContains(t, stdout.String(), "warning",
+				"mismatch warning must land on stderr, not stdout")
+			if tc.quiet {
+				assert.Empty(t, stdout.String(), "--quiet must suppress the summary")
+			} else {
+				assert.Contains(t, stdout.String(), "staged 0 packages, skipped 1")
+			}
+
+			r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = r.Close() })
+			rows, err := r.List(context.Background(), repo.Filter{})
+			require.NoError(t, err)
+			require.Len(t, rows, 1, "skip must not insert a new row")
+			assert.Equal(t, fakeSHA, rows[0].SHA256,
+				"skip must not overwrite the existing row's SHA256")
+			assert.Equal(t, syntheticFilename, rows[0].Filename,
+				"skip must not overwrite the existing row's Filename")
+
+			assert.NoFileExists(t, realPool, "no pool file must be written at the real Filename")
+			assert.NoFileExists(t, syntheticPool, "no pool file must be written at the synthetic Filename")
+		})
+	}
+}
+
 // addOnce performs a baseline successful add of a single .deb so subsequent
 // scenarios can exercise duplicate / replace logic against a populated repo.
 func addOnce(t *testing.T, state, public, deb string) {
