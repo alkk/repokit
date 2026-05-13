@@ -19,6 +19,7 @@ const (
 	ExitOK           = 0
 	ExitError        = 1
 	ExitUsage        = 2
+	binaryName       = "repokit"
 	dbFilename       = "repo.db"
 	configFilename   = "config.yaml"
 	envRepo          = "REPOKIT_ROOT"
@@ -30,14 +31,15 @@ const (
 // struct tags on Options; struct tags cannot reference constants, so the
 // canonical place to change a name is the tag, and these mirror it.
 const (
-	cmdInit    = "init"
-	cmdAdd     = "add"
-	cmdDelete  = "delete"
-	cmdList    = "list"
-	cmdSearch  = "search"
-	cmdPublish = "publish"
-	cmdVerify  = "verify"
-	cmdInfo    = "info"
+	cmdInit       = "init"
+	cmdAdd        = "add"
+	cmdDelete     = "delete"
+	cmdList       = "list"
+	cmdSearch     = "search"
+	cmdPublish    = "publish"
+	cmdVerify     = "verify"
+	cmdInfo       = "info"
+	cmdCompletion = "completion"
 )
 
 // Scope field names used by validateScopeName and structured log fields. They
@@ -176,14 +178,15 @@ type Options struct {
 	Public string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/delete/publish/verify; falls back to public_dir in config.yaml"`
 	Quiet  bool   `long:"quiet" short:"q" description:"suppress non-error output"`
 
-	Init    InitCmd    `command:"init" description:"initialize a new repository"`
-	Add     AddCmd     `command:"add" description:"add one or more .deb packages to a suite"`
-	Delete  DeleteCmd  `command:"delete" description:"delete packages from a suite"`
-	List    ListCmd    `command:"list" alias:"ls" description:"list packages"`
-	Search  SearchCmd  `command:"search" description:"search packages by name or description"`
-	Publish PublishCmd `command:"publish" description:"rebuild and sign dists/ for one or more suites"`
-	Verify  VerifyCmd  `command:"verify" description:"verify pool file hashes against the database"`
-	Info    InfoCmd    `command:"info" description:"inspect a .deb file without modifying the repo"`
+	Init       InitCmd       `command:"init" description:"initialize a new repository"`
+	Add        AddCmd        `command:"add" description:"add one or more .deb packages to a suite"`
+	Delete     DeleteCmd     `command:"delete" description:"delete packages from a suite"`
+	List       ListCmd       `command:"list" alias:"ls" description:"list packages"`
+	Search     SearchCmd     `command:"search" description:"search packages by name or description"`
+	Publish    PublishCmd    `command:"publish" description:"rebuild and sign dists/ for one or more suites"`
+	Verify     VerifyCmd     `command:"verify" description:"verify pool file hashes against the database"`
+	Info       InfoCmd       `command:"info" description:"inspect a .deb file without modifying the repo"`
+	Completion CompletionCmd `command:"completion" description:"emit a shell completion script (bash|zsh|fish); install with e.g. 'source <(repokit completion bash)'"`
 }
 
 // commandName returns the canonical subcommand name a parser dispatched to.
@@ -201,8 +204,17 @@ func commandName(p *flags.Parser) string {
 func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 	opts := &Options{}
 	parser := flags.NewParser(opts, flags.HelpFlag|flags.PassDoubleDash)
-	parser.Name = "repokit"
+	parser.Name = binaryName
 	parser.LongDescription = fmt.Sprintf("Minimal Debian repository manager (revision %s).", revision)
+	// Route go-flags completion output through the caller-supplied stdout
+	// writer instead of letting the parser write to os.Stdout and os.Exit(0).
+	// Without this, any test that invokes Run with GO_FLAGS_COMPLETION set
+	// would terminate the test binary mid-test.
+	parser.CompletionHandler = func(items []flags.Completion) {
+		for _, it := range items {
+			fmt.Fprintln(stdout, it.Item)
+		}
+	}
 
 	rest, err := parser.ParseArgs(argv)
 	if err != nil {
@@ -213,6 +225,12 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 		}
 		fmt.Fprintln(stderr, err.Error())
 		return ExitUsage
+	}
+	// In completion mode go-flags invoked the handler and returned (nil, nil)
+	// without populating parser.Active. Short-circuit before the "no
+	// subcommand → write help" branch fires.
+	if os.Getenv("GO_FLAGS_COMPLETION") != "" {
+		return ExitOK
 	}
 	if len(rest) > 0 {
 		fmt.Fprintf(stderr, "unexpected positional arguments: %v\n", rest)
@@ -256,6 +274,13 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 		ctx.PublicDir = publicDir
 	}
 
+	return dispatch(cmd, opts, ctx, stderr)
+}
+
+// dispatch routes the parsed subcommand to its Execute handler. It is split
+// out of Run so the per-subcommand switch does not push Run's cyclomatic
+// complexity past the linter threshold.
+func dispatch(cmd string, opts *Options, ctx *Context, stderr io.Writer) int {
 	switch cmd {
 	case cmdInit:
 		return opts.Init.Execute(ctx)
@@ -273,6 +298,8 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 		return opts.Verify.Execute(ctx)
 	case cmdInfo:
 		return opts.Info.Execute(ctx)
+	case cmdCompletion:
+		return opts.Completion.Execute(ctx)
 	default:
 		fmt.Fprintf(stderr, "unknown subcommand: %s\n", cmd)
 		return ExitUsage
@@ -309,7 +336,7 @@ func needsPublic(cmd string) bool {
 // silently passing list/search/verify and only blowing up on publish.
 func needsConfig(cmd string) bool {
 	switch cmd {
-	case cmdInit, cmdInfo:
+	case cmdInit, cmdInfo, cmdCompletion:
 		return false
 	default:
 		return true
@@ -431,7 +458,7 @@ func resolveRepoRoot(flagRepo, cmd string) (string, error) {
 			// a missing $HOME (minimal containers / CI sandboxes without a
 			// resolvable home) must not block either. The init handler
 			// surfaces its own error if no positional path was given.
-			if cmd == cmdInfo || cmd == cmdInit {
+			if cmd == cmdInfo || cmd == cmdInit || cmd == cmdCompletion {
 				return "", nil
 			}
 			return "", err
@@ -442,7 +469,7 @@ func resolveRepoRoot(flagRepo, cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolving repo root %q: %w", root, err)
 	}
-	if cmd == cmdInit || cmd == cmdInfo {
+	if cmd == cmdInit || cmd == cmdInfo || cmd == cmdCompletion {
 		return abs, nil
 	}
 	if _, err := os.Stat(filepath.Join(abs, dbFilename)); err != nil {

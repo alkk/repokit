@@ -15,19 +15,20 @@ import (
 	"github.com/alkk/repokit/pkg/deb"
 	"github.com/alkk/repokit/pkg/pool"
 	"github.com/alkk/repokit/pkg/repo"
+	flags "github.com/jessevdk/go-flags"
 )
 
 // AddCmd stages one or more .deb packages into the (distro, suite, component)
 // target. It only mutates the database and the pool tree; publishing the
 // dists/ index requires a separate `repokit publish` invocation.
 type AddCmd struct {
-	Distro    string `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
-	Suite     string `long:"suite" description:"target suite (e.g. bookworm)" required:"true"`
-	Component string `long:"component" default:"main" description:"target component"`
-	Replace   bool   `long:"replace" description:"overwrite an existing package with the same name/version/architecture"`
+	Distro    DistroName `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
+	Suite     string     `long:"suite" description:"target suite (e.g. bookworm)" required:"true"`
+	Component string     `long:"component" default:"main" description:"target component"`
+	Replace   bool       `long:"replace" description:"overwrite an existing package with the same name/version/architecture"`
 
 	Args struct {
-		Debs []string `positional-arg-name:"deb" required:"1"`
+		Debs []flags.Filename `positional-arg-name:"deb" required:"1"`
 	} `positional-args:"yes"`
 }
 
@@ -44,7 +45,7 @@ func (cmd *AddCmd) Execute(c *Context) int {
 // the DB rolls back and pool files written earlier in the batch are deleted
 // in reverse order to keep the on-disk tree consistent with the DB.
 func (cmd *AddCmd) run(c *Context) error {
-	if err := requireDistroScope(cmd.Distro); err != nil {
+	if err := requireDistroScope(string(cmd.Distro)); err != nil {
 		return err
 	}
 	for field, val := range map[string]string{
@@ -54,7 +55,7 @@ func (cmd *AddCmd) run(c *Context) error {
 			return err
 		}
 	}
-	if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+	if err := requireConfiguredDistro(c.Config, string(cmd.Distro)); err != nil {
 		return err
 	}
 	if cmd.Replace && len(cmd.Args.Debs) > 1 {
@@ -69,7 +70,7 @@ func (cmd *AddCmd) run(c *Context) error {
 	defer r.Close()
 
 	if cmd.Replace {
-		if err := cmd.reconcileBackup(ctx, c, r, cmd.Args.Debs[0]); err != nil {
+		if err := cmd.reconcileBackup(ctx, c, r, string(cmd.Args.Debs[0])); err != nil {
 			return fmt.Errorf("reconciling backup: %w", err)
 		}
 	}
@@ -79,7 +80,7 @@ func (cmd *AddCmd) run(c *Context) error {
 	var staleReplaced []string
 	txErr := r.Tx(ctx, func(tx *sql.Tx) error {
 		for _, p := range cmd.Args.Debs {
-			diskPath, backup, stale, perr := cmd.processOne(ctx, c, r, tx, p)
+			diskPath, backup, stale, perr := cmd.processOne(ctx, c, r, tx, string(p))
 			if perr != nil {
 				return perr
 			}
@@ -127,7 +128,7 @@ func (cmd *AddCmd) run(c *Context) error {
 	if !c.Quiet {
 		fmt.Fprintf(c.Stdout,
 			"staged %d packages in %s/%s — run 'repokit publish --distro %s --suite %s' to release\n",
-			len(cmd.Args.Debs), cmd.Distro, cmd.Suite, cmd.Distro, cmd.Suite)
+			len(cmd.Args.Debs), string(cmd.Distro), cmd.Suite, string(cmd.Distro), cmd.Suite)
 	}
 	return nil
 }
@@ -152,10 +153,10 @@ func (cmd *AddCmd) processOne(
 	}
 	filename := pool.Filename(cmd.Suite, cmd.Component,
 		info.Source, info.Name, info.Version, info.Architecture)
-	diskPath := pool.DiskPath(cmd.Distro, filename)
+	diskPath := pool.DiskPath(string(cmd.Distro), filename)
 
 	pkg := repo.Package{
-		Distro:       cmd.Distro,
+		Distro:       string(cmd.Distro),
 		Suite:        cmd.Suite,
 		Component:    cmd.Component,
 		Architecture: info.Architecture,
@@ -182,7 +183,7 @@ func (cmd *AddCmd) processOne(
 		}
 		for _, old := range oldRows {
 			if old.Filename != filename {
-				stale = pool.DiskPath(cmd.Distro, old.Filename)
+				stale = pool.DiskPath(string(cmd.Distro), old.Filename)
 				break
 			}
 		}
@@ -223,7 +224,7 @@ func (cmd *AddCmd) reconcileBackup(ctx context.Context, c *Context, r *repo.Repo
 	}
 	filename := pool.Filename(cmd.Suite, cmd.Component,
 		info.Source, info.Name, info.Version, info.Architecture)
-	diskPath := pool.DiskPath(cmd.Distro, filename)
+	diskPath := pool.DiskPath(string(cmd.Distro), filename)
 
 	dest := filepath.Join(c.PublicDir, filepath.FromSlash(diskPath))
 	if _, statErr := os.Lstat(dest + ".bak"); statErr != nil {
@@ -234,7 +235,7 @@ func (cmd *AddCmd) reconcileBackup(ctx context.Context, c *Context, r *repo.Repo
 	}
 
 	rows, err := r.List(ctx, repo.Filter{
-		Distro: cmd.Distro, Suite: cmd.Suite, Component: cmd.Component,
+		Distro: string(cmd.Distro), Suite: cmd.Suite, Component: cmd.Component,
 		Architecture: info.Architecture, Name: info.Name, Version: info.Version,
 	})
 	if err != nil {

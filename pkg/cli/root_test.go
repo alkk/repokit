@@ -110,6 +110,33 @@ func TestRunHelp(t *testing.T) {
 	assert.Contains(t, stdout.String(), "Usage:")
 }
 
+// TestRunCompletionHandler asserts that GO_FLAGS_COMPLETION=1 routes
+// completion items through the stdout writer rather than os.Exit(0)-ing the
+// process. The "i" prefix exercises subcommand-name completion: go-flags
+// should match init and info (alphabetical via sort.Strings on the parser's
+// command list).
+func TestRunCompletionHandler(t *testing.T) {
+	t.Setenv("GO_FLAGS_COMPLETION", "1")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"i"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	assert.Empty(t, stderr.String(), "stderr must stay clean during completion")
+	out := stdout.String()
+	assert.Contains(t, out, "init")
+	assert.Contains(t, out, "info")
+}
+
+// TestRunWithoutCompletionEnvIsUnchanged guards that the handler hook
+// introduced for completion does not perturb normal dispatch when
+// GO_FLAGS_COMPLETION is unset.
+func TestRunWithoutCompletionEnvIsUnchanged(t *testing.T) {
+	t.Setenv("GO_FLAGS_COMPLETION", "")
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+}
+
 func TestRunUnknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--definitely-not-a-flag"}, &stdout, &stderr, "test-rev")
@@ -419,16 +446,17 @@ func snapshotRoot(t *testing.T, root string) []string {
 
 func TestNeedsPublic(t *testing.T) {
 	cases := map[string]bool{
-		"add":     true,
-		"delete":  true,
-		"publish": true,
-		"verify":  true,
-		"init":    false,
-		"info":    false,
-		"list":    false,
-		"search":  false,
-		"":        false,
-		"unknown": false,
+		"add":        true,
+		"delete":     true,
+		"publish":    true,
+		"verify":     true,
+		"init":       false,
+		"info":       false,
+		"list":       false,
+		"search":     false,
+		"completion": false,
+		"":           false,
+		"unknown":    false,
 	}
 	for cmd, want := range cases {
 		t.Run(cmd, func(t *testing.T) {

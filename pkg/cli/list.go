@@ -14,12 +14,12 @@ import (
 // ListCmd prints packages matching the supplied filters in either a
 // human-friendly aligned table or line-delimited JSON for scripting.
 type ListCmd struct {
-	Distro    string `long:"distro" description:"filter by distribution (plain like 'debian' or namespaced like 'customer/acme')"`
-	Suite     string `long:"suite" description:"filter by suite"`
-	Component string `long:"component" description:"filter by component"`
-	Arch      string `long:"arch" description:"filter by architecture"`
-	Name      string `long:"name" description:"filter by package name"`
-	Format    string `long:"format" choice:"table" choice:"json" default:"table" description:"output format"`
+	Distro    DistroName `long:"distro" description:"filter by distribution (plain like 'debian' or namespaced like 'customer/acme')"`
+	Suite     string     `long:"suite" description:"filter by suite"`
+	Component string     `long:"component" description:"filter by component"`
+	Arch      string     `long:"arch" description:"filter by architecture"`
+	Name      string     `long:"name" description:"filter by package name"`
+	Format    string     `long:"format" choice:"table" choice:"json" default:"table" description:"output format"`
 }
 
 // Execute runs the list subcommand.
@@ -40,7 +40,7 @@ func (cmd *ListCmd) run(c *Context) error {
 	defer r.Close()
 
 	rows, err := r.List(ctx, repo.Filter{
-		Distro:       cmd.Distro,
+		Distro:       string(cmd.Distro),
 		Suite:        cmd.Suite,
 		Component:    cmd.Component,
 		Architecture: cmd.Arch,

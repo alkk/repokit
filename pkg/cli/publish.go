@@ -24,9 +24,9 @@ import (
 // PublishCmd rebuilds dists/<distro>/<suite>/ for one or more scopes and signs
 // the resulting Release. It does not touch pool/ or the packages table.
 type PublishCmd struct {
-	Distro string `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; omit with --suite to publish every suite known to the database)"`
-	Suite  string `long:"suite" description:"target suite"`
-	NoSign bool   `long:"no-sign" description:"skip signing — produce stub InRelease/Release.gpg via NopSigner"`
+	Distro DistroName `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; omit with --suite to publish every suite known to the database)"`
+	Suite  string     `long:"suite" description:"target suite"`
+	NoSign bool       `long:"no-sign" description:"skip signing — produce stub InRelease/Release.gpg via NopSigner"`
 }
 
 // Execute runs the publish subcommand.
@@ -54,14 +54,14 @@ type scope struct {
 }
 
 func (cmd *PublishCmd) run(c *Context) error {
-	if err := validateDistroScope(cmd.Distro); err != nil {
+	if err := validateDistroScope(string(cmd.Distro)); err != nil {
 		return err
 	}
 	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
 		return err
 	}
 	if cmd.Distro != "" {
-		if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+		if err := requireConfiguredDistro(c.Config, string(cmd.Distro)); err != nil {
 			return err
 		}
 	} else if err := requireConfiguredDistros(c.Config); err != nil {
@@ -115,7 +115,7 @@ func (cmd *PublishCmd) run(c *Context) error {
 func (cmd *PublishCmd) resolveScopes(ctx context.Context, publicDir string, distros []string,
 	stderr io.Writer, r *repo.Repo) ([]scope, error) {
 	if cmd.Distro != "" && cmd.Suite != "" {
-		return []scope{{distro: cmd.Distro, suite: cmd.Suite}}, nil
+		return []scope{{distro: string(cmd.Distro), suite: cmd.Suite}}, nil
 	}
 	if cmd.Distro != "" || cmd.Suite != "" {
 		return nil, errors.New("--distro and --suite must be provided together (or both omitted to publish all)")

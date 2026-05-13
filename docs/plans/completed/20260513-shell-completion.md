@@ -325,19 +325,19 @@ Discover affected tests before editing:
 - Modify: `pkg/cli/root.go`
 - Modify: `pkg/cli/root_test.go`
 
-- [ ] in `Run`, set `parser.CompletionHandler` after `flags.NewParser` and
+- [x] in `Run`, set `parser.CompletionHandler` after `flags.NewParser` and
       before `parser.ParseArgs`; handler iterates items and writes
       `item.Item` plus newline to the `stdout` writer
-- [ ] detect completion mode (`os.Getenv("GO_FLAGS_COMPLETION") != ""`)
+- [x] detect completion mode (`os.Getenv("GO_FLAGS_COMPLETION") != ""`)
       after `parser.ParseArgs` returns; if set, return `ExitOK` without
       falling through to the "no subcommand → write help" branch
-- [ ] add a test in `root_test.go` that calls `Run` with
+- [x] add a test in `root_test.go` that calls `Run` with
       `GO_FLAGS_COMPLETION=1` (via `t.Setenv`) and argv listing partial
       subcommand name (e.g. `[]string{"i"}`); assert stdout buffer
       contains `info` and `init`, stderr is empty, exit is `ExitOK`
-- [ ] add a second test confirming non-completion mode behaves identically
+- [x] add a second test confirming non-completion mode behaves identically
       to before (no regression for normal subcommand dispatch)
-- [ ] run `make test` — must pass before Task 2
+- [x] run `make test` — must pass before Task 2
 
 ### Task 2: Add `DistroName` type with dynamic completion
 
@@ -345,25 +345,25 @@ Discover affected tests before editing:
 - Create: `pkg/cli/distro_name.go`
 - Create: `pkg/cli/distro_name_test.go`
 
-- [ ] define `type DistroName string` in `pkg/cli/distro_name.go`
-- [ ] implement `lookupRepoFlag(args []string) string` covering all five
+- [x] define `type DistroName string` in `pkg/cli/distro_name.go`
+- [x] implement `lookupRepoFlag(args []string) string` covering all five
       forms specified in Technical Details (`--repo=X`, `--repo X`,
       `-r=X`, `-r X`, `-rX`); stop scanning at first positional; return
       `""` if `--repo` / `-r` is the last token
-- [ ] implement `completionStateDir() string` chaining flag → env →
+- [x] implement `completionStateDir() string` chaining flag → env →
       `defaultStateDir`, never returning an error
-- [ ] implement `(d *DistroName) Complete(match string) []flags.Completion`
+- [x] implement `(d *DistroName) Complete(match string) []flags.Completion`
       that loads config from the resolved state dir and returns filtered
       distros; returns nil on any error (silent during TAB completion)
-- [ ] write table-driven tests for `lookupRepoFlag` (each of the five
+- [x] write table-driven tests for `lookupRepoFlag` (each of the five
       forms, missing flag, last-token case, stops at first positional)
-- [ ] write tests for `Complete`: empty match returns all configured
+- [x] write tests for `Complete`: empty match returns all configured
       distros; prefix match filters; namespaced distro
       (`customer/acme`) round-trips; missing config returns nil; missing
       state dir returns nil; malformed config returns nil
-- [ ] override `defaultStateDir` in tests to point at a `t.TempDir()`
+- [x] override `defaultStateDir` in tests to point at a `t.TempDir()`
       fixture; verify `--repo` arg wins over env var
-- [ ] run `make test` — must pass before Task 3
+- [x] run `make test` — must pass before Task 3
 
 ### Task 3: Migrate `Distro` fields to `DistroName`
 
@@ -378,21 +378,24 @@ Discover affected tests before editing:
 - Modify: any `*_test.go` siblings that set `Distro:` literally (discover
   via `grep -n 'Distro: *"' pkg/cli/*_test.go` before editing)
 
-- [ ] change `Distro string` to `Distro DistroName` in all seven
+- [x] change `Distro string` to `Distro DistroName` in all seven
       subcommand structs (keep all struct tags identical)
-- [ ] add `string(cmd.Distro)` casts at every concrete call site listed
+- [x] add `string(cmd.Distro)` casts at every concrete call site listed
       in the Technical Details section (verified by grep); each cast
       should wrap the read so the diff is reviewable
-- [ ] confirm `repo.Filter{Distro: cmd.Distro, ...}` lines now read
+- [x] confirm `repo.Filter{Distro: cmd.Distro, ...}` lines now read
       `repo.Filter{Distro: string(cmd.Distro), ...}` in
       `add.go:158, 237`, `delete.go:64`, `list.go:43`, `search.go:55`,
       `verify.go:138, 157`
-- [ ] update tests that set `Distro:` literal-style to use
+- [x] update tests that set `Distro:` literal-style to use
       `Distro: DistroName("...")` (flag-parsed tests stay untouched, go-
-      flags converts through reflection)
-- [ ] run `make test` — every existing add/delete/publish/verify/info/
+      flags converts through reflection) — no changes needed; remaining
+      `Distro: "..."` literals are on `repo.Package` / `repo.Filter`
+      (string fields), and `AddCmd{Distro: "debian"}` works via
+      untyped-constant assignment to named string type
+- [x] run `make test` — every existing add/delete/publish/verify/info/
       list/search test must still pass; this is a pure refactor
-- [ ] run `make lint` — confirm no `unused-parameter` or `revive`
+- [x] run `make lint` — confirm no `unused-parameter` or `revive`
       regressions
 
 ### Task 4: Add shell wrappers and `completion` subcommand
@@ -405,9 +408,9 @@ Discover affected tests before editing:
 - Create: `pkg/cli/completion_test.go`
 - Modify: `pkg/cli/root.go`
 
-- [ ] write `pkg/cli/completion/bash.sh`, `zsh.sh`, `fish.sh` using the
+- [x] write `pkg/cli/completion/bash.sh`, `zsh.sh`, `fish.sh` using the
       wording in Technical Details; each ≤ 20 lines
-- [ ] create `pkg/cli/completion.go` with:
+- [x] create `pkg/cli/completion.go` with:
   - `//go:embed` directive on an `embed.FS` package variable
   - `completionScripts` map populated at `init()`; missing embedded file
     is a panic (build-time guarantee)
@@ -415,7 +418,7 @@ Discover affected tests before editing:
     that tag is silently ignored on positional args)
   - `Execute` validates the shell value manually; unsupported shell
     returns `ExitUsage` with a message listing valid choices
-- [ ] in `pkg/cli/root.go`:
+- [x] in `pkg/cli/root.go`:
   - add `cmdCompletion = "completion"` constant
   - add `Completion CompletionCmd` field on `Options` with `command:`
     tag and a help description showing the install pattern
@@ -425,13 +428,13 @@ Discover affected tests before editing:
     `cmdCompletion` — completion never touches `repo.db`
   - add the `case cmdCompletion: return opts.Completion.Execute(ctx)`
     dispatch
-- [ ] write `completion_test.go`: each valid shell choice emits a
+- [x] write `completion_test.go`: each valid shell choice emits a
       non-empty script containing a shell-specific sentinel
       (`complete -F` for bash, `compdef` for zsh, `complete -c repokit`
       for fish); unsupported shell (`powershell`) returns `ExitUsage`
       and writes the error message to stderr; missing positional fails
       via go-flags `required:"yes"` validation
-- [ ] run `make test` — must pass before Task 5
+- [x] run `make test` — must pass before Task 5
 
 ### Task 5: Switch `.deb` positionals to `flags.Filename`
 
@@ -441,16 +444,17 @@ Discover affected tests before editing:
 - Modify: any `*_test.go` that constructs `Args.Debs` / `Args.Deb` directly
   (discover via `grep -n "Args.Debs\|Args.Deb\b" pkg/cli/*_test.go`)
 
-- [ ] in `AddCmd`, change `Args.Debs []string` to
+- [x] in `AddCmd`, change `Args.Debs []string` to
       `Args.Debs []flags.Filename`
-- [ ] adjust the loop in `AddCmd.run` / `processOne` to cast each
+- [x] adjust the loop in `AddCmd.run` / `processOne` to cast each
       element to `string` before passing to `deb.Inspect` /
       `pool.Filename`
-- [ ] in `InfoCmd`, change the positional `.deb` field to
+- [x] in `InfoCmd`, change the positional `.deb` field to
       `flags.Filename` and cast at the read site
-- [ ] update any tests that construct `Args.Debs` / `Args.Deb` directly
-      to use `flags.Filename` literals
-- [ ] run `make test` — all add/info tests pass; existing integration
+- [x] update any tests that construct `Args.Debs` / `Args.Deb` directly
+      to use `flags.Filename` literals — none found (grep returned only
+      runtime call sites in `add.go` / `info.go`)
+- [x] run `make test` — all add/info tests pass; existing integration
       tests still drive through `cli.Run` with `[]string` argv and are
       unaffected by the field type
 
@@ -459,7 +463,7 @@ Discover affected tests before editing:
 **Files:**
 - Modify: `pkg/cli/integration_test.go`
 
-- [ ] add `TestIntegration_Completion` that:
+- [x] add `TestIntegration_Completion` that:
   - calls `t.Setenv("GO_FLAGS_COMPLETION", "1")`
   - writes a config fixture under `tmpState` with
     `distros: [debian, customer/acme]`
@@ -473,9 +477,11 @@ Discover affected tests before editing:
   - in a sub-`t.Run`, drives `--distro` value completion with argv
     `["--repo", tmpState, "add", "--distro", ""]`; asserts both
     `debian` and `customer/acme` appear in stdout
-- [ ] confirm `t.Setenv` cleanup works — subsequent tests must not see
-      `GO_FLAGS_COMPLETION` set
-- [ ] run `make test` — must pass before Task 7
+- [x] confirm `t.Setenv` cleanup works — subsequent tests must not see
+      `GO_FLAGS_COMPLETION` set (guaranteed by `t.Setenv`'s `t.Cleanup`
+      restore; the full `make test` run after the new case passes
+      confirms no leak into sibling integration tests)
+- [x] run `make test` — must pass before Task 7
 
 ### Task 7: Documentation
 
@@ -483,36 +489,36 @@ Discover affected tests before editing:
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] add a short "Shell completion" section to `README.md` after the
+- [x] add a short "Shell completion" section to `README.md` after the
       usage table with the three install one-liners; keep it ≤ 10
       lines of prose
-- [ ] add one bullet to `CLAUDE.md` `## Architecture` describing the
+- [x] add one bullet to `CLAUDE.md` `## Architecture` describing the
       `DistroName` type and `parser.CompletionHandler` wiring — enough
       context that a future contributor does not "fix" the type back
       to `string` or remove the handler
-- [ ] add one bullet to `CLAUDE.md` `## Gotchas`: completion runs with
+- [x] add one bullet to `CLAUDE.md` `## Gotchas`: completion runs with
       a custom `CompletionHandler` that writes to the `stdout` writer
       and returns; `DistroName.Complete` must remain silent on any
       error because stderr noise corrupts shell completion output
-- [ ] run `make test` and `make lint` — final sweep, all clean
+- [x] run `make test` and `make lint` — final sweep, all clean
 
 ### Task N-1: Verify acceptance criteria
 
-- [ ] verify `repokit completion bash`, `repokit completion zsh`,
+- [x] verify `repokit completion bash`, `repokit completion zsh`,
       `repokit completion fish` each emit non-empty output
-- [ ] verify `repokit completion powershell` exits with `ExitUsage`
+- [x] verify `repokit completion powershell` exits with `ExitUsage`
       and the stderr message lists the valid shells
-- [ ] verify all seven subcommands with `--distro` still reject
+- [x] verify all seven subcommands with `--distro` still reject
       malformed and unconfigured distros (no regression from the type
       change)
-- [ ] verify `make test` passes including the new integration test
-- [ ] verify `make lint` clean
-- [ ] verify coverage on new code ≥ 80%
+- [x] verify `make test` passes including the new integration test
+- [x] verify `make lint` clean
+- [x] verify coverage on new code ≥ 80%
 
 ### Task N: Update plan status
 
-- [ ] mark every checkbox `[x]` reflecting reality
-- [ ] move this file:
+- [x] mark every checkbox `[x]` reflecting reality
+- [x] move this file:
       `mkdir -p docs/plans/completed && mv docs/plans/20260513-shell-completion.md docs/plans/completed/`
 
 ## Post-Completion

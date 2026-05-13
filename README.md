@@ -50,8 +50,27 @@ shows it before running `publish` without `--no-sign`.
 | `publish` | rebuild and sign `<distro>/dists/` for one or more suites |
 | `verify` | rehash pool files and (optionally) GC orphans |
 | `info` | inspect a `.deb` without touching the repo |
+| `completion` | print a shell-completion wiring script (`bash`, `zsh`, or `fish`) |
 
 See [docs/usage.md](docs/usage.md) for the full flag reference.
+
+## Shell completion
+
+`repokit completion <shell>` prints a small wiring script for `bash`, `zsh`,
+or `fish` to stdout. Source it once and TAB completes subcommands, flag
+names, `.deb` file paths, and `--distro` values pulled live from
+`config.yaml`.
+
+```sh
+# bash — in ~/.bashrc:
+source <(repokit completion bash)
+
+# zsh — write to a directory on $fpath and reload compinit:
+repokit completion zsh > "${fpath[1]}/_repokit"
+
+# fish:
+repokit completion fish > ~/.config/fish/completions/repokit.fish
+```
 
 ## Layout
 

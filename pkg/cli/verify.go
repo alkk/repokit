@@ -27,9 +27,9 @@ import (
 // collects pool files that have no DB row. It never removes DB rows that point
 // at a missing pool file — that resolution requires a manual decision.
 type VerifyCmd struct {
-	Distro string `long:"distro" description:"limit verification to one distribution (plain like 'debian' or namespaced like 'customer/acme')"`
-	Suite  string `long:"suite" description:"limit verification to one suite (requires --distro)"`
-	GC     bool   `long:"gc" description:"remove orphan pool files (files with no database row)"`
+	Distro DistroName `long:"distro" description:"limit verification to one distribution (plain like 'debian' or namespaced like 'customer/acme')"`
+	Suite  string     `long:"suite" description:"limit verification to one suite (requires --distro)"`
+	GC     bool       `long:"gc" description:"remove orphan pool files (files with no database row)"`
 }
 
 // Execute runs the verify subcommand. Exit code is ExitOK when the scope is
@@ -80,14 +80,14 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 	if cmd.Suite != "" && cmd.Distro == "" {
 		return nil, errors.New("--suite requires --distro")
 	}
-	if err := validateDistroScope(cmd.Distro); err != nil {
+	if err := validateDistroScope(string(cmd.Distro)); err != nil {
 		return nil, err
 	}
 	if err := validateScopeName(fieldSuite, cmd.Suite); err != nil {
 		return nil, err
 	}
 	if cmd.Distro != "" {
-		if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+		if err := requireConfiguredDistro(c.Config, string(cmd.Distro)); err != nil {
 			return nil, err
 		}
 	} else if err := requireConfiguredDistros(c.Config); err != nil {
@@ -135,11 +135,11 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 // without a lock the report is best-effort, which is acceptable when no
 // destructive action follows.
 func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, distros []string, stderr io.Writer, r *repo.Repo, report *verifyReport) error {
-	rows, err := r.List(ctx, repo.Filter{Distro: cmd.Distro, Suite: cmd.Suite})
+	rows, err := r.List(ctx, repo.Filter{Distro: string(cmd.Distro), Suite: cmd.Suite})
 	if err != nil {
 		return fmt.Errorf("listing rows: %w", err)
 	}
-	rows = filterRowsByConfiguredDistros(cmd.Distro, rows, distros, stderr)
+	rows = filterRowsByConfiguredDistros(string(cmd.Distro), rows, distros, stderr)
 	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
@@ -154,11 +154,11 @@ func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, distros 
 func (cmd *VerifyCmd) verifyAndGC(
 	ctx context.Context, publicDir string, distros []string, stderr io.Writer, r *repo.Repo, conn *sql.Conn, report *verifyReport,
 ) error {
-	rows, err := r.ListConn(ctx, conn, repo.Filter{Distro: cmd.Distro, Suite: cmd.Suite})
+	rows, err := r.ListConn(ctx, conn, repo.Filter{Distro: string(cmd.Distro), Suite: cmd.Suite})
 	if err != nil {
 		return fmt.Errorf("listing rows: %w", err)
 	}
-	rows = filterRowsByConfiguredDistros(cmd.Distro, rows, distros, stderr)
+	rows = filterRowsByConfiguredDistros(string(cmd.Distro), rows, distros, stderr)
 	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (cmd *VerifyCmd) scanOrphansForScope(
 	report *verifyReport,
 ) error {
 	if cmd.Distro != "" {
-		return scanOrphans(publicDir, cmd.Distro, cmd.Suite, known, report)
+		return scanOrphans(publicDir, string(cmd.Distro), cmd.Suite, known, report)
 	}
 	return scanOrphansAcrossDistros(publicDir, distros, known, report)
 }

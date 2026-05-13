@@ -101,6 +101,17 @@ and `integration_realpkg_test.go` (the latter consumes prebuilt fixtures from
 `test-packages/`) exercise full end-to-end repo creation, publish, and
 verify.
 
+Shell completion: `--distro` flags across `add`, `delete`, `publish`,
+`verify`, `info`, `list`, `search` are typed as `cli.DistroName` (a named
+`string`) so the underlying type can implement go-flags' `Completer`
+interface and serve dynamic values from `config.yaml`. `cli.Run` installs
+a custom `parser.CompletionHandler` before `parser.ParseArgs` that writes
+items to the `stdout` writer parameter; this replaces go-flags' default
+"println to process stdout, then `os.Exit(0)`" behaviour and makes
+completion testable through `cli.Run`. The `completion` subcommand
+(`pkg/cli/completion.go`) emits per-shell wrapper scripts embedded via
+`//go:embed completion/{bash,zsh,fish}.sh`.
+
 ## Gotchas
 
 - Goreleaser v2 deprecated `archives.builds` and `nfpms.builds`; use `ids:` instead.
@@ -132,3 +143,10 @@ verify.
   segments (`customer/acme/stable` → distro `customer/acme`, suite `stable`).
   The distro half is then re-validated by `ValidateDistroName`, which rejects
   a left half carrying more than one `/`.
+- Completion mode (`GO_FLAGS_COMPLETION=1`) is wired through a custom
+  `parser.CompletionHandler` that writes to the `stdout` `io.Writer` passed
+  into `cli.Run` and lets the function return `ExitOK`. Without it, go-flags
+  would `fmt.Println` to process stdout and `os.Exit(0)` mid-test. The
+  `DistroName.Complete` implementation MUST stay silent on error (no stderr,
+  no logging) because any byte on stderr corrupts the shell's TAB display;
+  operators surface real config errors by running a non-completion command.

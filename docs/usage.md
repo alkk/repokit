@@ -273,6 +273,49 @@ Prints `Package`, `Version`, `Architecture`, `Source` (when present), `Size`,
 the four hashes, and the target pool path (when `--distro` and `--suite` are
 supplied — otherwise a hint is printed).
 
+### `completion`
+
+Print a shell wiring script that delegates TAB completion for `repokit` back
+to the binary itself (via `GO_FLAGS_COMPLETION=1`). The script is written to
+stdout; source it from your shell rc to activate. Does not read or require a
+`repo.db`, `config.yaml`, or `public_dir` — safe to run on a fresh machine
+before `repokit init`.
+
+```
+repokit completion <shell>
+```
+
+| Argument | Description |
+|---|---|
+| `<shell>` (positional, required) | one of `bash`, `zsh`, `fish` |
+
+Install examples:
+
+```sh
+# bash — add to ~/.bashrc:
+source <(repokit completion bash)
+
+# zsh — write to a directory on $fpath and reload compinit:
+repokit completion zsh > "${fpath[1]}/_repokit"
+
+# fish:
+repokit completion fish > ~/.config/fish/completions/repokit.fish
+```
+
+Once sourced, TAB completes subcommand names, flag names, `.deb` file paths,
+and `--distro` values drawn live from `config.yaml`'s `distros:` list.
+
+Dynamic `--distro` completion resolves the state dir using the same chain as
+every other command (`--repo` > `$REPOKIT_ROOT` > `~/.repokit/`), reading
+`--repo` from the partial command line being completed. If the resolved
+state dir has no `config.yaml`, is unreadable, or holds a malformed config,
+TAB silently produces no values — run the equivalent non-completion command
+to surface the underlying error.
+
+Unsupported shell values exit with code `2` and print the accepted list to
+stderr. The wiring scripts are embedded in the binary at build time, so no
+filesystem layout assumptions apply.
+
 ## Configuration file
 
 `config.yaml` lives in the state dir (the same directory as `repo.db`) and is

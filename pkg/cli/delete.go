@@ -18,15 +18,15 @@ import (
 // wipes. Deleting every version of a named package additionally requires
 // --all-versions as a confirmation guard when --version is omitted.
 type DeleteCmd struct {
-	Distro      string `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
-	Suite       string `long:"suite" description:"target suite" required:"true"`
-	Component   string `long:"component" description:"filter by component"`
-	Arch        string `long:"arch" description:"filter by architecture"`
-	Name        string `long:"name" description:"filter by package name"`
-	Version     string `long:"version" description:"filter by package version"`
-	SHA256      string `long:"sha256" description:"filter by sha256 hash"`
-	AllVersions bool   `long:"all-versions" description:"required confirmation when deleting every version of a named package"`
-	DryRun      bool   `long:"dry-run" description:"print what would be deleted without making changes"`
+	Distro      DistroName `long:"distro" description:"target distribution (plain like 'debian' or namespaced like 'customer/acme'; must be declared in config.distros)" required:"true"`
+	Suite       string     `long:"suite" description:"target suite" required:"true"`
+	Component   string     `long:"component" description:"filter by component"`
+	Arch        string     `long:"arch" description:"filter by architecture"`
+	Name        string     `long:"name" description:"filter by package name"`
+	Version     string     `long:"version" description:"filter by package version"`
+	SHA256      string     `long:"sha256" description:"filter by sha256 hash"`
+	AllVersions bool       `long:"all-versions" description:"required confirmation when deleting every version of a named package"`
+	DryRun      bool       `long:"dry-run" description:"print what would be deleted without making changes"`
 }
 
 // Execute runs the delete subcommand.
@@ -49,7 +49,7 @@ func (cmd *DeleteCmd) run(c *Context) error {
 	if err := cmd.validate(); err != nil {
 		return err
 	}
-	if err := requireConfiguredDistro(c.Config, cmd.Distro); err != nil {
+	if err := requireConfiguredDistro(c.Config, string(cmd.Distro)); err != nil {
 		return err
 	}
 
@@ -61,7 +61,7 @@ func (cmd *DeleteCmd) run(c *Context) error {
 	defer r.Close()
 
 	filter := repo.Filter{
-		Distro:       cmd.Distro,
+		Distro:       string(cmd.Distro),
 		Suite:        cmd.Suite,
 		Component:    cmd.Component,
 		Architecture: cmd.Arch,
@@ -81,7 +81,7 @@ func (cmd *DeleteCmd) run(c *Context) error {
 // filter, but its message is opaque to the user — surface a friendlier one
 // here.
 func (cmd *DeleteCmd) validate() error {
-	if err := requireDistroScope(cmd.Distro); err != nil {
+	if err := requireDistroScope(string(cmd.Distro)); err != nil {
 		return fmt.Errorf("%w: %w", errDeleteUsage, err)
 	}
 	if err := requireScopeName(fieldSuite, cmd.Suite); err != nil {
@@ -178,5 +178,5 @@ func (cmd *DeleteCmd) report(c *Context, rows []repo.Package, dryRun bool) {
 		return
 	}
 	fmt.Fprintf(c.Stdout, "deleted %d package(s) — run 'repokit publish --distro %s --suite %s' to update indexes\n",
-		len(rows), cmd.Distro, cmd.Suite)
+		len(rows), string(cmd.Distro), cmd.Suite)
 }

@@ -14,9 +14,9 @@ import (
 // line-delimited JSON formats as `list` so the two commands compose with the
 // same downstream tools.
 type SearchCmd struct {
-	Distro string `long:"distro" description:"filter by distribution (plain like 'debian' or namespaced like 'customer/acme')"`
-	Suite  string `long:"suite" description:"filter by suite"`
-	Format string `long:"format" choice:"table" choice:"json" default:"table" description:"output format"`
+	Distro DistroName `long:"distro" description:"filter by distribution (plain like 'debian' or namespaced like 'customer/acme')"`
+	Suite  string     `long:"suite" description:"filter by suite"`
+	Format string     `long:"format" choice:"table" choice:"json" default:"table" description:"output format"`
 
 	Args struct {
 		Query string `positional-arg-name:"query" description:"substring to match against package name or control text"`
@@ -52,7 +52,7 @@ func (cmd *SearchCmd) run(c *Context) error {
 	defer r.Close()
 
 	rows, err := r.Search(ctx, cmd.Args.Query, repo.Filter{
-		Distro: cmd.Distro,
+		Distro: string(cmd.Distro),
 		Suite:  cmd.Suite,
 	})
 	if err != nil {

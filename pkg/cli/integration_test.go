@@ -403,6 +403,64 @@ func TestIntegration_NamespacedDistro(t *testing.T) {
 		"failure must come from requireConfiguredDistro, not the scope validator")
 }
 
+// TestIntegration_Completion drives the full TAB-completion flow end-to-end
+// through cli.Run with GO_FLAGS_COMPLETION=1 set. The two sub-tests cover the
+// two completion code paths that ship in this branch:
+//
+//   - subcommand-name completion: go-flags lists every top-level command when
+//     the trailing token is empty.
+//   - --distro value completion: go-flags routes through *DistroName.Complete,
+//     which reads config.yaml from the resolved state dir and returns every
+//     configured distro (plain `debian` and the namespaced `customer/acme`).
+//
+// REPOKIT_ROOT is set via t.Setenv so completionStateDir() resolves to tmpState
+// — the test binary's os.Args doesn't carry --repo, and Options.Repo is not
+// populated by go-flags in completion mode. The trailing empty argv element is
+// go-flags' "complete here" marker (see vendor/.../go-flags/completion.go:244,
+// where lastarg = s.args[len-1] is the partial prefix being completed).
+//
+// t.Setenv guarantees both GO_FLAGS_COMPLETION and REPOKIT_ROOT are restored at
+// test end, so neither leaks into subsequent tests in the package.
+func TestIntegration_Completion(t *testing.T) {
+	tmpState := t.TempDir()
+
+	var bootStdout, bootStderr bytes.Buffer
+	code := Run([]string{"--repo", tmpState, "init"}, &bootStdout, &bootStderr, "test-rev")
+	require.Equalf(t, ExitOK, code, "init failed: %s", bootStderr.String())
+	appendTestDistros(t, tmpState, "debian", "customer/acme")
+
+	t.Setenv("GO_FLAGS_COMPLETION", "1")
+	t.Setenv(envRepo, tmpState)
+
+	t.Run("subcommand names", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := Run([]string{"--repo", tmpState, ""}, &stdout, &stderr, "test-rev")
+		require.Equalf(t, ExitOK, code, "stderr: %s", stderr.String())
+		assert.Empty(t, stderr.String(), "stderr must stay clean during completion")
+		out := stdout.String()
+		for _, name := range []string{
+			cmdInit, cmdAdd, cmdDelete, cmdList, cmdSearch,
+			cmdPublish, cmdVerify, cmdInfo, cmdCompletion,
+		} {
+			assert.Containsf(t, out, name,
+				"subcommand %q missing from completion output:\n%s", name, out)
+		}
+	})
+
+	t.Run("distro values", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := Run([]string{"--repo", tmpState, "add", "--distro", ""},
+			&stdout, &stderr, "test-rev")
+		require.Equalf(t, ExitOK, code, "stderr: %s", stderr.String())
+		assert.Empty(t, stderr.String(), "stderr must stay clean during completion")
+		out := stdout.String()
+		assert.Contains(t, out, "debian",
+			"plain distro must appear in --distro completion output")
+		assert.Contains(t, out, "customer/acme",
+			"namespaced distro must round-trip through completion")
+	})
+}
+
 // assertSuiteLayout verifies the published structure for one (distro, suite):
 // concrete binary-<arch> directories exist, binary-all does not, the Packages
 // triple is present and consistent with Release, and the Release header lists

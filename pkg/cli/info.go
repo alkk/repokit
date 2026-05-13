@@ -6,18 +6,19 @@ import (
 
 	"github.com/alkk/repokit/pkg/deb"
 	"github.com/alkk/repokit/pkg/pool"
+	flags "github.com/jessevdk/go-flags"
 )
 
 // InfoCmd inspects a single .deb file and prints what `add` would do, without
 // touching the repo. Distro/Suite/Component are optional flags that, when
 // provided, materialize the full target pool path.
 type InfoCmd struct {
-	Distro    string `long:"distro" description:"distribution to compute target pool path for (plain like 'debian' or namespaced like 'customer/acme')"`
-	Suite     string `long:"suite" description:"suite to compute target pool path for"`
-	Component string `long:"component" default:"main" description:"component to compute target pool path for"`
+	Distro    DistroName `long:"distro" description:"distribution to compute target pool path for (plain like 'debian' or namespaced like 'customer/acme')"`
+	Suite     string     `long:"suite" description:"suite to compute target pool path for"`
+	Component string     `long:"component" default:"main" description:"component to compute target pool path for"`
 
 	Args struct {
-		Deb string `positional-arg-name:"deb" required:"yes"`
+		Deb flags.Filename `positional-arg-name:"deb" required:"yes"`
 	} `positional-args:"yes"`
 }
 
@@ -31,7 +32,7 @@ func (cmd *InfoCmd) Execute(c *Context) int {
 }
 
 func (cmd *InfoCmd) run(w io.Writer) error {
-	if err := validateDistroScope(cmd.Distro); err != nil {
+	if err := validateDistroScope(string(cmd.Distro)); err != nil {
 		return err
 	}
 	for field, val := range map[string]string{
@@ -41,7 +42,7 @@ func (cmd *InfoCmd) run(w io.Writer) error {
 			return err
 		}
 	}
-	info, err := deb.Inspect(cmd.Args.Deb)
+	info, err := deb.Inspect(string(cmd.Args.Deb))
 	if err != nil {
 		return fmt.Errorf("inspecting %s: %w", cmd.Args.Deb, err)
 	}
@@ -61,7 +62,7 @@ func (cmd *InfoCmd) run(w io.Writer) error {
 	if cmd.Distro != "" && cmd.Suite != "" {
 		filename := pool.Filename(cmd.Suite, cmd.Component,
 			info.Source, info.Name, info.Version, info.Architecture)
-		diskPath := pool.DiskPath(cmd.Distro, filename)
+		diskPath := pool.DiskPath(string(cmd.Distro), filename)
 		fmt.Fprintf(w, "Pool path (apt):  %s\n", filename)
 		fmt.Fprintf(w, "Pool path (disk): %s\n", diskPath)
 	} else {
