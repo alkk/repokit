@@ -7,16 +7,16 @@ import (
 	"strings"
 )
 
-//go:embed completion/bash.sh completion/zsh.sh completion/fish.sh
+//go:embed completion/hook.bash completion/hook.zsh completion/hook.fish
 var completionFS embed.FS
 
 // completionScripts holds the shell wrapper script for each supported shell,
 // keyed by the shell name accepted as the positional argument. Populated at
 // init() so a missing embed surfaces at process start rather than first TAB.
 var completionScripts = map[string]string{
-	"bash": mustReadCompletion("completion/bash.sh"),
-	"zsh":  mustReadCompletion("completion/zsh.sh"),
-	"fish": mustReadCompletion("completion/fish.sh"),
+	"bash": mustReadCompletion("completion/hook.bash"),
+	"zsh":  mustReadCompletion("completion/hook.zsh"),
+	"fish": mustReadCompletion("completion/hook.fish"),
 }
 
 // mustReadCompletion loads an embedded script, panicking if the file is
