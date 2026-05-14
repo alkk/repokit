@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -17,8 +17,8 @@ func TestSearchMatchByName(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "search", "hello-gz"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "search", "hello-gz"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "hello-gz")
@@ -34,8 +34,8 @@ func TestSearchMatchByControlDescription(t *testing.T) {
 	// "fixture" appears only in the Description field of every fixture, so a
 	// match on this term proves the LIKE scan reaches the control column too.
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "search", "fixture"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "search", "fixture"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "hello-gz")
@@ -49,10 +49,10 @@ func TestSearchFilteredBySuite(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "search", "fixture", "--suite", "bullseye",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "hello-xz")
@@ -66,8 +66,8 @@ func TestSearchNoMatchesIsSilent(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "search", "no-such-package"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "search", "no-such-package"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Empty(t, stdout.String())
 }
 
@@ -78,10 +78,10 @@ func TestSearchJSONFormat(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "search", "hello", "--format", "json",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	require.Len(t, lines, 2)
@@ -99,10 +99,10 @@ func TestSearchJSONNoMatchesProducesNoOutput(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "search", "no-such-package", "--format", "json",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Empty(t, stdout.String())
 }
 
@@ -111,8 +111,8 @@ func TestSearchMissingQueryRejected(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "search"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	code := run([]string{"--repo", root, "search"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr.String(), "query")
 }
 
@@ -121,9 +121,9 @@ func TestSearchInvalidFormatRejected(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "search", "hello", "--format", "xml",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	assert.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr.String(), "format")
 }

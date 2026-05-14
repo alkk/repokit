@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -24,8 +24,8 @@ import (
 func initRepoForTest(t *testing.T, root string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "init"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "init failed: %s", stderr.String())
+	code := run([]string{"--repo", root, "init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "init failed: %s", stderr.String())
 	appendTestDistros(t, root, "debian", "ubuntu")
 }
 
@@ -72,10 +72,10 @@ func appendTestDistros(t *testing.T, root string, distros ...string) {
 }
 
 // fixtureDeb returns the absolute path to a testdata .deb fixture sitting in
-// pkg/deb/testdata/. Tests run with cwd == pkg/cli, so we resolve relative.
+// pkg/deb/testdata/. Tests run with cwd == cmd/repokit, so we resolve relative.
 func fixtureDeb(t *testing.T, name string) string {
 	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "deb", "testdata", name))
+	abs, err := filepath.Abs(filepath.Join("..", "..", "pkg", "deb", "testdata", name))
 	require.NoError(t, err)
 	require.FileExists(t, abs)
 	return abs
@@ -132,12 +132,12 @@ func TestAddSinglePackage(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	wantFilename := "pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"
 	wantDisk := "debian/" + wantFilename
@@ -185,8 +185,8 @@ func TestAddMultiplePackages(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 	}, debs...)
 	var stdout, stderr bytes.Buffer
-	code := Run(args, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run(args, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	pool := listPoolFiles(t, tmpPublic)
 	assert.ElementsMatch(t, []string{
@@ -208,12 +208,12 @@ func TestAddDuplicateWithoutReplace(t *testing.T) {
 	addOnce(t, tmpState, tmpPublic, deb)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "duplicate hello-gz_1.0_amd64")
 	assert.Contains(t, stderr.String(), "existing sha256:")
 	assert.Contains(t, stderr.String(), "new sha256:")
@@ -256,12 +256,12 @@ func TestAddReplaceOverwrites(t *testing.T) {
 	})
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--replace",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	assert.Equal(t, 1, rowCount(t, tmpState), "replace should keep exactly one row")
 
@@ -283,11 +283,11 @@ func TestAddRequiresFlags(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	assert.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr.String(), "required")
 
 	assert.Equal(t, 0, rowCount(t, tmpState))
@@ -303,12 +303,12 @@ func TestAddBadDebFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(bogus, []byte("not a real .deb"), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm",
 		bogus,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "add:")
 
 	assert.Equal(t, 0, rowCount(t, tmpState))
@@ -323,12 +323,12 @@ func TestAddRejectsMultiDebReplace(t *testing.T) {
 	deb2 := fixtureDeb(t, "hello-xz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--replace",
 		deb1, deb2,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "single .deb argument")
 	assert.Equal(t, 0, rowCount(t, tmpState))
 }
@@ -340,12 +340,12 @@ func TestAddRejectsUnsafeScope(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "../etc", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "--distro")
 	assert.Equal(t, 0, rowCount(t, tmpState))
 	assert.Empty(t, listPoolFiles(t, tmpPublic))
@@ -375,8 +375,8 @@ func TestAddRejectsEmptyScope(t *testing.T) {
 			args = append(args, deb)
 
 			var stdout, stderr bytes.Buffer
-			code := Run(args, &stdout, &stderr, "test-rev")
-			assert.Equal(t, ExitError, code)
+			code := run(args, &stdout, &stderr, "test-rev")
+			assert.Equal(t, exitError, code)
 			assert.Contains(t, stderr.String(), "must not be empty")
 			assert.Equal(t, 0, rowCount(t, tmpState))
 			assert.Empty(t, listPoolFiles(t, tmpPublic))
@@ -393,12 +393,12 @@ func TestAddRejectsControlCharsInScope(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm\nLabel: Forged",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "control characters")
 	assert.Equal(t, 0, rowCount(t, tmpState))
 	assert.Empty(t, listPoolFiles(t, tmpPublic))
@@ -417,12 +417,12 @@ func TestAddBatchRollback(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "definitely-missing.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm",
 		good1, good2, missing,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 
 	assert.Equal(t, 0, rowCount(t, tmpState), "DB must be empty after batch rollback")
 	assert.Empty(t, listPoolFiles(t, tmpPublic), "pool must contain no files after batch rollback")
@@ -463,12 +463,12 @@ func TestAddReplaceSweepsOldPoolFileOnSourceChange(t *testing.T) {
 	})
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--replace",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	assert.NoFileExists(t, stalePool, "old pool file at prior shard must be removed")
 	assert.FileExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
@@ -496,12 +496,12 @@ func TestAddReplaceClearsStaleBackup(t *testing.T) {
 	require.NoError(t, os.WriteFile(dest+".bak", []byte("stale-prev-version"), 0o644))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--replace",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	assert.NoFileExists(t, dest+".bak",
 		"reconciled stale .bak plus the new .bak from this run must both be cleaned up")
@@ -586,12 +586,12 @@ func TestAddRejectsUnconfiguredDistro(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "raspbian", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), `"raspbian"`,
 		"error should name the offending --distro value")
 	assert.Contains(t, stderr.String(), "config.distros",
@@ -614,12 +614,12 @@ func TestAddAcceptsNamespacedDistro(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "customer/acme", "--suite", "stable",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	want := filepath.Join(tmpPublic, filepath.FromSlash(
 		"customer/acme/pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
@@ -637,13 +637,13 @@ func TestAddRejectsSkipExistingWithReplace(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm",
 		"--skip-existing", "--replace",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "--skip-existing and --replace are mutually exclusive")
 	assert.Equal(t, 0, rowCount(t, tmpState))
 	assert.Empty(t, listPoolFiles(t, tmpPublic))
@@ -666,12 +666,12 @@ func TestAddSkipExistingIdenticalReAdd(t *testing.T) {
 	preSHA := fileSHA256(t, poolPath)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stderr.String(),
 		"skipping hello-gz_1.0_amd64: already present in debian/bookworm/main")
 	assert.Contains(t, stdout.String(), "staged 0 packages, skipped 1")
@@ -691,12 +691,12 @@ func TestAddSkipExistingNoCollisions(t *testing.T) {
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.NotContains(t, stderr.String(), "skipping")
 	assert.Regexp(t, `\bstaged 1 packages\b`, stdout.String())
 	assert.NotContains(t, stdout.String(), "skipped")
@@ -719,12 +719,12 @@ func TestAddSkipExistingAllSkipped(t *testing.T) {
 	before := listPoolFiles(t, tmpPublic)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
 		deb1, deb2,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "staged 0 packages, skipped 2")
 	assert.Equal(t, 2, rowCount(t, tmpState))
 
@@ -743,12 +743,12 @@ func TestAddSkipExistingUnderQuiet(t *testing.T) {
 	addOnce(t, tmpState, tmpPublic, deb)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "--quiet", "add",
 		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Empty(t, stdout.String(), "--quiet must suppress the summary")
 	assert.Contains(t, stderr.String(),
 		"skipping hello-gz_1.0_amd64: already present in debian/bookworm/main")
@@ -769,12 +769,12 @@ func TestAddSkipExistingMixedBatch(t *testing.T) {
 	require.Equal(t, 1, rowCount(t, tmpState))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
 		existing, newA, newB,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	assert.Equal(t, 1, strings.Count(stderr.String(), "skipping "),
 		"mixed batch must produce exactly one skip notice on stderr")
@@ -809,12 +809,12 @@ func TestAddSkipExistingBatchRollbackOnNonSkipError(t *testing.T) {
 	before := listPoolFiles(t, tmpPublic)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "debian", "--suite", "bookworm", "--skip-existing",
 		existing, good, missing,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Equal(t, 1, rowCount(t, tmpState),
 		"non-skip error must roll back the in-batch insert; only the pre-existing row remains")
 	assert.ElementsMatch(t, before, listPoolFiles(t, tmpPublic),
@@ -880,8 +880,8 @@ func TestAddSkipExistingMismatchedSHA(t *testing.T) {
 				"--distro", "debian", "--suite", "bookworm", "--skip-existing", deb)
 
 			var stdout, stderr bytes.Buffer
-			code := Run(args, &stdout, &stderr, "test-rev")
-			require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+			code := run(args, &stdout, &stderr, "test-rev")
+			require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 			assert.Contains(t, stderr.String(), "warning: skipping hello-gz_1.0_amd64")
 			assert.Contains(t, stderr.String(), "NVRA matches but sha256 differs")
@@ -917,10 +917,10 @@ func TestAddSkipExistingMismatchedSHA(t *testing.T) {
 func addOnce(t *testing.T, state, public, deb string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", state, "--public", public, "add",
 		"--distro", "debian", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "baseline add failed: %s", stderr.String())
+	require.Equal(t, exitOK, code, "baseline add failed: %s", stderr.String())
 }

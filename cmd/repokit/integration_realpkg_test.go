@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 )
 
 // realPkg returns the absolute path of a .deb under test-packages/. Tests
-// run with cwd == pkg/cli, so test-packages/ is two levels up from cwd.
+// run with cwd == cmd/repokit, so test-packages/ is two levels up from cwd.
 func realPkg(t *testing.T, rel string) string {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "..", "test-packages", rel))
@@ -71,9 +71,9 @@ func TestIntegration_RealPackages(t *testing.T) {
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...),
+		code := run(append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...),
 			&stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
 	runCmd("init")

@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -33,9 +33,9 @@ type PublishCmd struct {
 func (cmd *PublishCmd) Execute(c *Context) int {
 	if err := cmd.run(c); err != nil {
 		fmt.Fprintf(c.Stderr, "publish: %v\n", err)
-		return ExitError
+		return exitError
 	}
-	return ExitOK
+	return exitOK
 }
 
 const (

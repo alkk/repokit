@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -34,11 +34,11 @@ func (cmd *DeleteCmd) Execute(c *Context) int {
 	if err := cmd.run(c); err != nil {
 		fmt.Fprintf(c.Stderr, "delete: %v\n", err)
 		if errors.Is(err, errDeleteUsage) {
-			return ExitUsage
+			return exitUsage
 		}
-		return ExitError
+		return exitError
 	}
-	return ExitOK
+	return exitOK
 }
 
 // errDeleteUsage flags an invalid flag combination so Execute can map it to a

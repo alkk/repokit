@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -28,11 +28,11 @@ func (cmd *SearchCmd) Execute(c *Context) int {
 	if err := cmd.run(c); err != nil {
 		fmt.Fprintf(c.Stderr, "search: %v\n", err)
 		if errors.Is(err, errSearchUsage) {
-			return ExitUsage
+			return exitUsage
 		}
-		return ExitError
+		return exitError
 	}
-	return ExitOK
+	return exitOK
 }
 
 // errSearchUsage marks invalid invocations so Execute can map them to the

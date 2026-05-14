@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -26,9 +26,9 @@ type ListCmd struct {
 func (cmd *ListCmd) Execute(c *Context) int {
 	if err := cmd.run(c); err != nil {
 		fmt.Fprintf(c.Stderr, "list: %v\n", err)
-		return ExitError
+		return exitError
 	}
-	return ExitOK
+	return exitOK
 }
 
 func (cmd *ListCmd) run(c *Context) error {

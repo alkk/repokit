@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"archive/tar"
@@ -43,11 +43,11 @@ func TestIntegration_InitAddPublish(t *testing.T) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
 		full := append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...)
-		code := Run(full, &stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+		code := run(full, &stdout, &stderr, "test-rev")
+		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
-	// init does not consume --public (and would not need it), but Run accepts
+	// init does not consume --public (and would not need it), but run accepts
 	// the flag at the global level regardless, so we can keep one runCmd helper.
 	runCmd("init")
 	appendTestDistros(t, tmpState, "debian", "ubuntu")
@@ -120,8 +120,8 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", tmpState, name}, args...), &stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+		code := run(append([]string{"--repo", tmpState, name}, args...), &stdout, &stderr, "test-rev")
+		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
 	runCmd("init")
@@ -256,8 +256,8 @@ func TestIntegration_CrossDistroSameSuite(t *testing.T) {
 	runCmd := func(name string, args ...string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := Run(append([]string{"--repo", tmpState, name}, args...), &stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+		code := run(append([]string{"--repo", tmpState, name}, args...), &stdout, &stderr, "test-rev")
+		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
 	runCmd("init")
@@ -329,8 +329,8 @@ func TestIntegration_NamespacedDistro(t *testing.T) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
 		full := append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...)
-		code := Run(full, &stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "%s failed: %s", name, stderr.String())
+		code := run(full, &stdout, &stderr, "test-rev")
+		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
 	}
 
 	runCmd("init")
@@ -393,18 +393,18 @@ func TestIntegration_NamespacedDistro(t *testing.T) {
 	// validator accepts foo/bar, so this proves the configured-distro gate
 	// still fires for the namespaced form.
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "foo/bar", "--suite", "stable", deb,
 	}, &stdout, &stderr, "test-rev")
-	require.NotEqual(t, ExitOK, code,
+	require.NotEqual(t, exitOK, code,
 		"add against unconfigured namespaced distro must fail")
 	assert.Contains(t, stderr.String(), "not in config.distros",
 		"failure must come from requireConfiguredDistro, not the scope validator")
 }
 
 // TestIntegration_Completion drives the full TAB-completion flow end-to-end
-// through cli.Run with GO_FLAGS_COMPLETION=1 set. The two sub-tests cover the
+// through run with GO_FLAGS_COMPLETION=1 set. The two sub-tests cover the
 // two completion code paths that ship in this branch:
 //
 //   - subcommand-name completion: go-flags lists every top-level command when
@@ -425,8 +425,8 @@ func TestIntegration_Completion(t *testing.T) {
 	tmpState := t.TempDir()
 
 	var bootStdout, bootStderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "init"}, &bootStdout, &bootStderr, "test-rev")
-	require.Equalf(t, ExitOK, code, "init failed: %s", bootStderr.String())
+	code := run([]string{"--repo", tmpState, "init"}, &bootStdout, &bootStderr, "test-rev")
+	require.Equalf(t, exitOK, code, "init failed: %s", bootStderr.String())
 	appendTestDistros(t, tmpState, "debian", "customer/acme")
 
 	t.Setenv("GO_FLAGS_COMPLETION", "1")
@@ -434,8 +434,8 @@ func TestIntegration_Completion(t *testing.T) {
 
 	t.Run("subcommand names", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code := Run([]string{"--repo", tmpState, ""}, &stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "stderr: %s", stderr.String())
+		code := run([]string{"--repo", tmpState, ""}, &stdout, &stderr, "test-rev")
+		require.Equalf(t, exitOK, code, "stderr: %s", stderr.String())
 		assert.Empty(t, stderr.String(), "stderr must stay clean during completion")
 		out := stdout.String()
 		for _, name := range []string{
@@ -449,9 +449,9 @@ func TestIntegration_Completion(t *testing.T) {
 
 	t.Run("distro values", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code := Run([]string{"--repo", tmpState, "add", "--distro", ""},
+		code := run([]string{"--repo", tmpState, "add", "--distro", ""},
 			&stdout, &stderr, "test-rev")
-		require.Equalf(t, ExitOK, code, "stderr: %s", stderr.String())
+		require.Equalf(t, exitOK, code, "stderr: %s", stderr.String())
 		assert.Empty(t, stderr.String(), "stderr must stay clean during completion")
 		out := stdout.String()
 		assert.Contains(t, out, "debian",

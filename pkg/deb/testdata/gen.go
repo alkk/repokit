@@ -150,20 +150,20 @@ func buildControlTar(control string) ([]byte, error) {
 	tw := tar.NewWriter(&buf)
 	mtime := time.Unix(1700000000, 0).UTC()
 	if err := tw.WriteHeader(&tar.Header{
-		Name:    "./",
-		Mode:    0o755,
+		Name:     "./",
+		Mode:     0o755,
 		Typeflag: tar.TypeDir,
-		ModTime: mtime,
+		ModTime:  mtime,
 	}); err != nil {
 		return nil, err
 	}
 	body := []byte(control)
 	if err := tw.WriteHeader(&tar.Header{
-		Name:    "./control",
-		Mode:    0o644,
-		Size:    int64(len(body)),
+		Name:     "./control",
+		Mode:     0o644,
+		Size:     int64(len(body)),
 		Typeflag: tar.TypeReg,
-		ModTime: mtime,
+		ModTime:  mtime,
 	}); err != nil {
 		return nil, err
 	}
@@ -181,26 +181,26 @@ func buildDataTar() ([]byte, error) {
 	tw := tar.NewWriter(&buf)
 	mtime := time.Unix(1700000000, 0).UTC()
 	if err := tw.WriteHeader(&tar.Header{
-		Name:    "./",
-		Mode:    0o755,
+		Name:     "./",
+		Mode:     0o755,
 		Typeflag: tar.TypeDir,
-		ModTime: mtime,
+		ModTime:  mtime,
 	}); err != nil {
 		return nil, err
 	}
 	if err := tw.WriteHeader(&tar.Header{
-		Name:    "./usr/",
-		Mode:    0o755,
+		Name:     "./usr/",
+		Mode:     0o755,
 		Typeflag: tar.TypeDir,
-		ModTime: mtime,
+		ModTime:  mtime,
 	}); err != nil {
 		return nil, err
 	}
 	if err := tw.WriteHeader(&tar.Header{
-		Name:    "./usr/share/",
-		Mode:    0o755,
+		Name:     "./usr/share/",
+		Mode:     0o755,
 		Typeflag: tar.TypeDir,
-		ModTime: mtime,
+		ModTime:  mtime,
 	}); err != nil {
 		return nil, err
 	}
@@ -264,4 +264,3 @@ func compressControlTar(raw []byte, ext string) ([]byte, string, error) {
 	}
 	return nil, "", fmt.Errorf("unknown ext %q", ext)
 }
-

@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -52,16 +52,16 @@ func (cmd *InitCmd) Execute(c *Context) int {
 	root, err := cmd.resolveRoot(c.Root)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "init: %v\n", err)
-		return ExitError
+		return exitError
 	}
 	if err := initRepo(root); err != nil {
 		fmt.Fprintf(c.Stderr, "init: %v\n", err)
-		return ExitError
+		return exitError
 	}
 	if !c.Quiet {
 		fmt.Fprintf(c.Stdout, "initialized repo at %s\n", root)
 	}
-	return ExitOK
+	return exitOK
 }
 
 // resolveRoot picks the positional argument when provided, otherwise the

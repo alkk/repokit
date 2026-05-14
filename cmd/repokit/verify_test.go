@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ func runVerify(t *testing.T, state, public string, args ...string) (int, string,
 	t.Helper()
 	full := append([]string{"--repo", state, "--public", public, "verify"}, args...)
 	var stdout, stderr bytes.Buffer
-	code := Run(full, &stdout, &stderr, "test-rev")
+	code := run(full, &stdout, &stderr, "test-rev")
 	return code, stdout.String(), stderr.String()
 }
 
@@ -33,7 +33,7 @@ func TestVerifyCleanRepoPasses(t *testing.T) {
 	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-xz_1.0_amd64.deb")
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "mismatch")
 	assert.NotContains(t, stdout, "orphan")
@@ -51,7 +51,7 @@ func TestVerifyTamperedFileDetected(t *testing.T) {
 	require.NoError(t, os.WriteFile(tampered, []byte("not a real deb"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
-	require.Equal(t, ExitError, code, "stderr: %s", stderr)
+	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "mismatch debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 mismatch(es)")
 }
@@ -67,7 +67,7 @@ func TestVerifyMissingPoolFileDetected(t *testing.T) {
 	require.NoError(t, os.Remove(target))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
-	require.Equal(t, ExitError, code, "stderr: %s", stderr)
+	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "missing debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 missing")
 }
@@ -84,7 +84,7 @@ func TestVerifyOrphanDetected(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
-	require.Equal(t, ExitError, code, "stderr: %s", stderr)
+	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 orphan(s)")
 
@@ -105,7 +105,7 @@ func TestVerifyGCRemovesOnlyOrphan(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb (removed)")
 	assert.Contains(t, stdout, "verify: ok")
 
@@ -125,7 +125,7 @@ func TestVerifyGCDoesNotRemoveRowsForMissingPoolFiles(t *testing.T) {
 	require.NoError(t, os.Remove(target))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitError, code, "stderr: %s", stderr)
+	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "missing")
 	assert.Equal(t, 1, rowCount(t, tmpState), "rows for missing pool files must survive --gc")
 }
@@ -143,7 +143,7 @@ func TestVerifyScopedToSuiteIgnoresOtherSuites(t *testing.T) {
 	require.NoError(t, os.WriteFile(otherOrphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "debian", "--suite", "bookworm")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "ghost", "out-of-scope orphan must not be reported")
 	assert.FileExists(t, otherOrphan)
@@ -155,7 +155,7 @@ func TestVerifySuiteWithoutDistroErrors(t *testing.T) {
 	initRepoForTest(t, tmpState)
 
 	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--suite", "bookworm")
-	require.Equal(t, ExitError, code)
+	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "--suite requires --distro")
 }
 
@@ -165,7 +165,7 @@ func TestVerifyEmptyRepoPasses(t *testing.T) {
 	initRepoForTest(t, tmpState)
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 }
 
@@ -194,7 +194,7 @@ func TestVerifyScopedToDistroCoversAllSuites(t *testing.T) {
 	require.NoError(t, os.WriteFile(otherDistroOrphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "debian", "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "ghost-book", "distro-scoped verify must cover bookworm")
 	assert.Contains(t, stdout, "ghost-bull", "distro-scoped verify must cover bullseye")
 	assert.NotContains(t, stdout, "ghost-noble", "verify --distro debian must not touch ubuntu")
@@ -221,7 +221,7 @@ func TestVerifyGCPreservesPoolWriteArtifacts(t *testing.T) {
 	require.NoError(t, os.WriteFile(dest+".tmp", []byte("new bytes"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.NotContains(t, stdout, ".bak", "pool-write .bak must not be reported as orphan")
 	assert.NotContains(t, stdout, ".tmp", "pool-write .tmp must not be reported as orphan")
 	assert.FileExists(t, dest+".bak", "--gc must preserve .bak so an interrupted Replace stays recoverable")
@@ -281,7 +281,7 @@ func TestVerifyGCSerializesWithConcurrentWriter(t *testing.T) {
 
 	select {
 	case res := <-verifyDone:
-		require.Equal(t, ExitOK, res.code, "stderr: %s", res.stderr)
+		require.Equal(t, exitOK, res.code, "stderr: %s", res.stderr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("verify --gc did not finish after writer lock release")
 	}
@@ -297,12 +297,12 @@ func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
 	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "add",
 		"--distro", "ubuntu", "--suite", "noble",
 		fixtureDeb(t, "hello-gz_1.0_amd64.deb"),
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "fixture add for ubuntu failed: %s", stderr.String())
+	require.Equal(t, exitOK, code, "fixture add for ubuntu failed: %s", stderr.String())
 
 	debianOrphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
 		"ghost-deb_1.0_amd64.deb")
@@ -314,7 +314,7 @@ func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
 	}
 
 	code, out, errOut := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", errOut)
+	require.Equal(t, exitOK, code, "stderr: %s", errOut)
 	assert.Contains(t, out, "orphan debian/pool/bookworm/main/g/ghost/ghost-deb_1.0_amd64.deb (removed)")
 	assert.Contains(t, out, "orphan ubuntu/pool/noble/main/g/ghost/ghost-ubu_1.0_amd64.deb (removed)")
 	assert.NoFileExists(t, debianOrphan)
@@ -338,7 +338,7 @@ func TestVerifyUnscopedFindsOrphansInDBEmptyDistro(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan ubuntu/pool/noble/main/g/ghost/ghost_1.0_amd64.deb (removed)")
 	assert.NoFileExists(t, orphan, "--gc must reclaim orphans even when the distro has no DB rows")
 }
@@ -353,7 +353,7 @@ func TestVerifyRejectsUnsafeScope(t *testing.T) {
 	require.NoError(t, os.WriteFile(sentinel, []byte("must survive"), 0o644))
 
 	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc", "--distro", "..")
-	require.Equal(t, ExitError, code)
+	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "--distro")
 	assert.FileExists(t, sentinel, "sentinel outside pool/ must not be touched by verify --gc")
 }
@@ -377,7 +377,7 @@ func TestVerifyDoesNotTouchStateDir(t *testing.T) {
 	require.NoError(t, err)
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "ghost", "verify must not visit pool trees inside the state dir")
 
@@ -408,7 +408,7 @@ func TestVerifyGCLeavesUnconfiguredDistroAlone(t *testing.T) {
 	require.NoError(t, os.WriteFile(foreign, []byte("not repokit's"), 0o644))
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "raspbian", "verify must never walk unconfigured trees")
 
@@ -435,7 +435,7 @@ func TestVerifyUnconfiguredDistroFlagAborts(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc", "--distro", "raspbian")
-	require.Equal(t, ExitError, code)
+	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "raspbian")
 	assert.Contains(t, stderr, "config.distros")
 	assert.FileExists(t, orphan, "verify must abort before any pool walk when --distro is unconfigured")
@@ -459,7 +459,7 @@ func TestVerifyUnscopedRejectsEmptyDistros(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
 	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitError, code)
+	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "config.distros is empty")
 	assert.FileExists(t, orphan, "verify --gc must abort before any pool walk when config.distros is empty")
 }
@@ -484,7 +484,7 @@ func TestVerifyUnscopedSkipsRowsForUnconfiguredDistro(t *testing.T) {
 	require.NoError(t, err)
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.Contains(t, stderr, `"raspbian"`,
 		"stderr must warn that the unconfigured distro was skipped")
@@ -512,6 +512,6 @@ func TestVerifyAcceptsNamespacedDistro(t *testing.T) {
 	insertPackage(t, tmpState, pkg)
 
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "customer/acme")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 }

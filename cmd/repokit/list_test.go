@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -23,12 +23,12 @@ func seedTwoSuites(t *testing.T, state, public string) {
 		{"bullseye", fixtureDeb(t, "hello-xz_1.0_amd64.deb")},
 	} {
 		var stdout, stderr bytes.Buffer
-		code := Run([]string{
+		code := run([]string{
 			"--repo", state, "--public", public, "add",
 			"--distro", "debian", "--suite", tc.suite,
 			tc.deb,
 		}, &stdout, &stderr, "test-rev")
-		require.Equal(t, ExitOK, code, "seeding %s failed: %s", tc.suite, stderr.String())
+		require.Equal(t, exitOK, code, "seeding %s failed: %s", tc.suite, stderr.String())
 	}
 }
 
@@ -39,8 +39,8 @@ func TestListTableShowsHeaderAndRows(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
@@ -62,10 +62,10 @@ func TestListFiltersBySuite(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "list", "--suite", "bullseye",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "hello-xz")
@@ -79,10 +79,10 @@ func TestListFiltersByName(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "list", "--name", "hello-gz",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "hello-gz")
@@ -94,8 +94,8 @@ func TestListEmptyTableSilent(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Empty(t, stdout.String(), "empty table output should be silent")
 }
 
@@ -106,10 +106,10 @@ func TestListJSONFormat(t *testing.T) {
 	seedTwoSuites(t, root, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "list", "--format", "json",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	require.Len(t, lines, 2)
@@ -133,10 +133,10 @@ func TestListJSONEmptyProducesNoOutput(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "list", "--format", "json",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Empty(t, stdout.String())
 }
 
@@ -145,9 +145,9 @@ func TestListInvalidFormatRejected(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", root, "list", "--format", "xml",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	assert.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr.String(), "format")
 }

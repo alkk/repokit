@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -101,11 +101,11 @@ func TestPublishEmptySuite(t *testing.T) {
 	initRepoForTest(t, tmpState)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	releasePath := filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release")
 	body, err := os.ReadFile(releasePath)
@@ -140,11 +140,11 @@ func TestPublishMultiArch(t *testing.T) {
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "all", "common", "2.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	dists := filepath.Join(tmpPublic, "debian", "dists", "bookworm")
 
@@ -187,11 +187,11 @@ func TestPublishRejectsArchAllOnlySuite(t *testing.T) {
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "all", "common", "1.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "arch=all")
 	assert.Contains(t, stderr.String(), "concrete-architecture")
 
@@ -223,11 +223,11 @@ func TestPublishRecoversLiveFromOldEvenForArchAllOnlySuite(t *testing.T) {
 	require.NoError(t, os.MkdirAll(newPath, 0o755))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "arch=all")
 
 	body, err := os.ReadFile(filepath.Join(livePath, "sentinel"))
@@ -254,8 +254,8 @@ func TestPublishMissingDistroOrSuite(t *testing.T) {
 			full := append([]string{"--repo", tmpState, "--public", tmpPublic, "publish"}, tc.args...)
 			full = append(full, "--no-sign")
 			var stdout, stderr bytes.Buffer
-			code := Run(full, &stdout, &stderr, "test-rev")
-			assert.Equal(t, ExitError, code)
+			code := run(full, &stdout, &stderr, "test-rev")
+			assert.Equal(t, exitError, code)
 			assert.Contains(t, stderr.String(), "must be provided together")
 		})
 	}
@@ -270,9 +270,9 @@ func TestPublishAllScopesWhenBothEmpty(t *testing.T) {
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "ubuntu", "noble", "amd64", "bravo", "2.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 2 suite(s)")
 
 	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm", "Release"))
@@ -292,8 +292,8 @@ func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
 
 	args := []string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"}
 	var stdout, stderr bytes.Buffer
-	code := Run(args, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
+	code := run(args, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "first publish: %s", stderr.String())
 
 	pkgPath := filepath.Join(tmpPublic, "debian", "dists", "bookworm", "main", "binary-amd64", "Packages")
 	body, err := os.ReadFile(pkgPath)
@@ -315,8 +315,8 @@ func TestPublishAllScopesIncludesEmptiedSuites(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(args, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "second publish: %s", stderr.String())
+	code = run(args, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "second publish: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 1 suite(s)")
 
 	assert.NoFileExists(t, pkgPath,
@@ -344,9 +344,9 @@ func TestPublishAllScopesIgnoresStrayDirsWithoutRelease(t *testing.T) {
 	require.NoError(t, os.WriteFile(strayFile, []byte("not managed by repokit\n"), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "no suites to publish")
 
 	assert.DirExists(t, stray, "stray directory must remain after no-op publish")
@@ -362,15 +362,15 @@ func TestPublishAtomicSwapReplacesLive(t *testing.T) {
 
 	args := []string{"--repo", tmpState, "--public", tmpPublic, "publish", "--distro", "debian", "--suite", "bookworm", "--no-sign"}
 	var stdout, stderr bytes.Buffer
-	code := Run(args, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
+	code := run(args, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "first publish: %s", stderr.String())
 
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "2.0"))
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(args, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "second publish: %s", stderr.String())
+	code = run(args, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "second publish: %s", stderr.String())
 
 	body, err := os.ReadFile(filepath.Join(tmpPublic, "debian", "dists", "bookworm",
 		"main", "binary-amd64", "Packages"))
@@ -417,11 +417,11 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			code := Run([]string{
+			code := run([]string{
 				"--repo", tmpState, "--public", tmpPublic, "publish",
 				"--distro", "debian", "--suite", "bookworm", "--no-sign",
 			}, &stdout, &stderr, "test-rev")
-			require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+			require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 			assert.NoDirExists(t, newPath, "stale .new must be removed")
 			assert.NoDirExists(t, oldPath, "stale .old must be removed")
@@ -435,7 +435,7 @@ func TestPublishCleansStaleStagingDirs(t *testing.T) {
 // MkdirAllSync(newPath) and into the signer.Sign error path. After the
 // returned error propagates, the deferred cleanup must have removed
 // <suite>.new so a user inspecting the tree never sees a stale staging dir.
-// Bypasses Run([]string{...}) because pickSigner cannot be subbed through
+// Bypasses run([]string{...}) because pickSigner cannot be subbed through
 // that public seam.
 func TestPublishRemovesStagingOnFailure(t *testing.T) {
 	tmpState := t.TempDir()
@@ -472,11 +472,11 @@ func TestPublishPreservesLiveTreeOnFailure(t *testing.T) {
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "first publish: %s", stderr.String())
+	require.Equal(t, exitOK, code, "first publish: %s", stderr.String())
 
 	livePath := filepath.Join(tmpPublic, "debian", "dists", "bookworm")
 	releasePath := filepath.Join(livePath, "Release")
@@ -518,11 +518,11 @@ func TestPublishGzAndXzMatchPlain(t *testing.T) {
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "debian", "bookworm", "amd64", "alpha", "1.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	dir := filepath.Join(tmpPublic, "debian", "dists", "bookworm", "main", "binary-amd64")
 	plain, err := os.ReadFile(filepath.Join(dir, "Packages"))
@@ -561,9 +561,9 @@ func TestPublishAllScopesSkipsInvalidDiscoveredScopeNames(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(stray, "Release"), []byte("Origin: forged\n"), 0o644))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "no suites to publish")
 
 	assert.DirExists(t, stray, "scope skipped by validation must remain untouched")
@@ -632,9 +632,9 @@ func TestPublishUnscopedEmitsNamespacedDistro(t *testing.T) {
 	insertPackage(t, tmpState, pkg)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 1 suite(s)")
 	assert.DirExists(t, filepath.Join(tmpPublic, "customer", "acme", "dists", "stable"))
 }
@@ -672,9 +672,9 @@ func TestPublishAllScopesSkipsInvalidDBScopeNames(t *testing.T) {
 	require.NoError(t, r.Close())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 1 suite(s)")
 
 	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "dists", "bookworm"))
@@ -701,9 +701,9 @@ func TestPublishWalksPublicDirNotState(t *testing.T) {
 		[]byte("Origin: forged\n"), 0o644))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "no suites to publish",
 		"trap dists tree in state must not be discovered as a publish target")
 
@@ -749,11 +749,11 @@ func TestPublishRecordsLastPublishTimestamp(t *testing.T) {
 
 	before := time.Now().Unix()
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	after := time.Now().Unix()
 
 	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
@@ -780,11 +780,11 @@ func TestPublishRejectsMalformedConfig(t *testing.T) {
 		[]byte("origin: ok\nsuites: [oops"), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "loading config")
 }
 
@@ -802,11 +802,11 @@ func TestPublishRequiresSigningKeyWithoutNoSign(t *testing.T) {
 		[]byte("distros:\n  - debian\n"), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "debian", "--suite", "bookworm",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "signing_key")
 	assert.Contains(t, stderr.String(), "--no-sign")
 }
@@ -884,7 +884,7 @@ func TestPublishSerializesWithConcurrentWriter(t *testing.T) {
 	}, 1)
 	go func() {
 		var stdout, stderr bytes.Buffer
-		code := Run([]string{
+		code := run([]string{
 			"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign",
 			"--distro", "debian", "--suite", "bookworm",
 		}, &stdout, &stderr, "test-rev")
@@ -905,14 +905,14 @@ func TestPublishSerializesWithConcurrentWriter(t *testing.T) {
 
 	select {
 	case res := <-publishDone:
-		require.Equal(t, ExitOK, res.code, "stderr: %s", res.stderr)
+		require.Equal(t, exitOK, res.code, "stderr: %s", res.stderr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("publish did not finish after writer lock release")
 	}
 }
 
 // TestPublishRejectsUnconfiguredDistro asserts that a --distro value not in
-// config.distros aborts publish with ExitError before any staging directory
+// config.distros aborts publish with exitError before any staging directory
 // is created. The fixture distro list is debian/ubuntu (from
 // initRepoForTest); "raspbian" is deliberately absent.
 func TestPublishRejectsUnconfiguredDistro(t *testing.T) {
@@ -921,11 +921,11 @@ func TestPublishRejectsUnconfiguredDistro(t *testing.T) {
 	initRepoForTest(t, tmpState)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"--repo", tmpState, "--public", tmpPublic, "publish",
 		"--distro", "raspbian", "--suite", "bullseye", "--no-sign",
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), `"raspbian"`,
 		"error should name the offending --distro value")
 	assert.Contains(t, stderr.String(), "config.distros",
@@ -953,9 +953,9 @@ func TestPublishAllScopesIgnoresUnconfiguredDiskDistro(t *testing.T) {
 	require.NoError(t, os.WriteFile(raspbianRelease, originalBody, 0o644))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "no suites to publish")
 
 	body, err := os.ReadFile(raspbianRelease)
@@ -980,9 +980,9 @@ func TestPublishAllScopesSkipsUnconfiguredDBRow(t *testing.T) {
 	insertPackage(t, tmpState, fakePackage(t, tmpPublic, "raspbian", "bullseye", "armhf", "beta", "1.0"))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "published 1 suite(s)",
 		"only the configured distro's suite must be published")
 	assert.Contains(t, stderr.String(), `"raspbian"`,
@@ -1008,9 +1008,9 @@ func TestPublishUnscopedRejectsEmptyDistros(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpState, configFilename), []byte(body), 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
+	code := run([]string{"--repo", tmpState, "--public", tmpPublic, "publish", "--no-sign"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitError, code)
+	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "config.distros is empty")
 	assert.NotContains(t, stdout.String(), "no suites to publish",
 		"empty distros must fail loudly, not silently report no-op success")

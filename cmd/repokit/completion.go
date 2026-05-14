@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"embed"
@@ -47,10 +47,10 @@ func (cmd *CompletionCmd) Execute(c *Context) int {
 		fmt.Fprintf(c.Stderr,
 			"completion: unsupported shell %q (valid: %s)\n",
 			cmd.Args.Shell, supportedShells())
-		return ExitUsage
+		return exitUsage
 	}
 	fmt.Fprint(c.Stdout, script)
-	return ExitOK
+	return exitOK
 }
 
 // supportedShells returns the sorted list of shells with embedded wrappers,

@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -20,8 +20,8 @@ func TestCompletionCmdShellSentinels(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.shell, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := Run([]string{"completion", tc.shell}, &stdout, &stderr, "test-rev")
-			require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+			code := run([]string{"completion", tc.shell}, &stdout, &stderr, "test-rev")
+			require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 			assert.Empty(t, stderr.String())
 			out := stdout.String()
 			assert.NotEmpty(t, out)
@@ -32,8 +32,8 @@ func TestCompletionCmdShellSentinels(t *testing.T) {
 
 func TestCompletionCmdUnsupportedShell(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"completion", "powershell"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	code := run([]string{"completion", "powershell"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitUsage, code)
 	assert.Empty(t, stdout.String(), "no partial script may leak to stdout when shell is rejected")
 	msg := stderr.String()
 	assert.Contains(t, msg, "powershell")
@@ -44,8 +44,8 @@ func TestCompletionCmdUnsupportedShell(t *testing.T) {
 
 func TestCompletionCmdMissingShell(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"completion"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	code := run([]string{"completion"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitUsage, code)
 	assert.NotEmpty(t, stderr.String())
 	assert.Contains(t, stderr.String(), "shell",
 		"error must name the missing positional so operators know what to supply")
@@ -61,8 +61,8 @@ func TestCompletionCmdSkipsStateDir(t *testing.T) {
 	t.Cleanup(func() { defaultStateDir = prev })
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"completion", "bash"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"completion", "bash"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "_repokit")
 }
 

@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -41,9 +41,9 @@ type AddCmd struct {
 func (cmd *AddCmd) Execute(c *Context) int {
 	if err := cmd.run(c); err != nil {
 		fmt.Fprintf(c.Stderr, "add: %v\n", err)
-		return ExitError
+		return exitError
 	}
-	return ExitOK
+	return exitOK
 }
 
 // validate enforces the flag-level invariants before any I/O — scope-name

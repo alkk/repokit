@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -26,8 +26,8 @@ func addFixtureForTest(t *testing.T, state, public, suite, fixture string) {
 		fixtureDeb(t, fixture),
 	}
 	var stdout, stderr bytes.Buffer
-	code := Run(args, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "fixture add failed: %s", stderr.String())
+	code := run(args, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "fixture add failed: %s", stderr.String())
 }
 
 // runDelete invokes the delete subcommand with the supplied flags after the
@@ -36,7 +36,7 @@ func runDelete(t *testing.T, state, public string, args ...string) (int, string,
 	t.Helper()
 	full := append([]string{"--repo", state, "--public", public, "delete"}, args...)
 	var stdout, stderr bytes.Buffer
-	code := Run(full, &stdout, &stderr, "test-rev")
+	code := run(full, &stdout, &stderr, "test-rev")
 	return code, stdout.String(), stderr.String()
 }
 
@@ -76,7 +76,7 @@ func TestDeleteByNameAndVersion(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "hello-gz", "--version", "1.0",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted hello-gz_1.0_amd64")
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Contains(t, stdout, "run 'repokit publish --distro debian --suite bookworm'")
@@ -108,7 +108,7 @@ func TestDeleteBySHA256(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--sha256", target,
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 
 	remaining := rowSHA256s(t, tmpState)
@@ -127,7 +127,7 @@ func TestDeleteAllVersions(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "hello-gz",
 	)
-	require.Equal(t, ExitUsage, code)
+	require.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr, "--all-versions")
 	assert.Equal(t, 2, rowCount(t, tmpState), "no rows should be removed when validation fails")
 
@@ -135,7 +135,7 @@ func TestDeleteAllVersions(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "hello-gz", "--all-versions",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Equal(t, 1, rowCount(t, tmpState))
 }
@@ -150,7 +150,7 @@ func TestDeleteDryRunMakesNoChanges(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "hello-gz", "--version", "1.0", "--dry-run",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "would delete hello-gz_1.0_amd64")
 	assert.Contains(t, stdout, "(dry run, no changes made)")
 	assert.NotContains(t, stdout, "run 'repokit publish")
@@ -168,7 +168,7 @@ func TestDeleteRequiresFilter(t *testing.T) {
 	code, _, stderr := runDelete(t, tmpState, tmpPublic,
 		"--distro", "debian", "--suite", "bookworm",
 	)
-	require.Equal(t, ExitUsage, code)
+	require.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr, "at least one of --name or --sha256")
 
 	assert.Equal(t, 1, rowCount(t, tmpState))
@@ -184,7 +184,7 @@ func TestDeleteRequiresDistroAndSuite(t *testing.T) {
 	code, _, stderr := runDelete(t, tmpState, tmpPublic,
 		"--name", "hello-gz", "--version", "1.0",
 	)
-	assert.Equal(t, ExitUsage, code)
+	assert.Equal(t, exitUsage, code)
 	assert.Contains(t, stderr, "required")
 	assert.Equal(t, 1, rowCount(t, tmpState))
 }
@@ -199,7 +199,7 @@ func TestDeleteNoMatchIsNotAnError(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "ghost", "--version", "1.0",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted 0 package(s)")
 	assert.Equal(t, 1, rowCount(t, tmpState))
 }
@@ -218,7 +218,7 @@ func TestDeleteScopedToSuite(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "hello-gz", "--version", "1.0",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 
 	assert.Equal(t, 1, rowCount(t, tmpState))
 	assert.Equal(t, 1, poolFileCount(t, tmpPublic))
@@ -286,7 +286,7 @@ func TestDeleteSerializesWithConcurrentWriter(t *testing.T) {
 
 	select {
 	case res := <-deleteDone:
-		require.Equal(t, ExitOK, res.code, "stderr: %s", res.stderr)
+		require.Equal(t, exitOK, res.code, "stderr: %s", res.stderr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("delete did not finish after writer lock release")
 	}
@@ -320,7 +320,7 @@ func TestDeleteRejectsEmptyDistroSuite(t *testing.T) {
 			}
 
 			code, _, stderr := runDelete(t, tmpState, tmpPublic, args...)
-			assert.Equal(t, ExitUsage, code)
+			assert.Equal(t, exitUsage, code)
 			assert.Contains(t, stderr, "must not be empty")
 			assert.Equal(t, 2, rowCount(t, tmpState), "no rows must be removed")
 		})
@@ -331,7 +331,7 @@ func TestDeleteRejectsEmptyDistroSuite(t *testing.T) {
 // --component and --arch. Without it, a value like "../etc" would flow into
 // the SQL filter and (worse) into any later filesystem operation that joins
 // component or arch into a path; a newline would let a Release header be
-// forged via the audit log. The test asserts ExitUsage and that no rows are
+// forged via the audit log. The test asserts exitUsage and that no rows are
 // removed.
 func TestDeleteRejectsUnsafeComponentArch(t *testing.T) {
 	tmpState := t.TempDir()
@@ -359,7 +359,7 @@ func TestDeleteRejectsUnsafeComponentArch(t *testing.T) {
 				"--name", "hello-gz", "--all-versions",
 			}
 			code, _, stderr := runDelete(t, tmpState, tmpPublic, args...)
-			assert.Equal(t, ExitUsage, code)
+			assert.Equal(t, exitUsage, code)
 			assert.Contains(t, stderr, tc.field, "error should name the rejected flag")
 			assert.Equal(t, 1, rowCount(t, tmpState), "no rows must be removed")
 		})
@@ -367,7 +367,7 @@ func TestDeleteRejectsUnsafeComponentArch(t *testing.T) {
 }
 
 // TestDeleteRejectsUnconfiguredDistro asserts that a --distro value not in
-// config.distros aborts delete with ExitError before any DB row is touched.
+// config.distros aborts delete with exitError before any DB row is touched.
 // The fixture distro list is debian/ubuntu (from initRepoForTest); "raspbian"
 // is deliberately absent.
 func TestDeleteRejectsUnconfiguredDistro(t *testing.T) {
@@ -380,7 +380,7 @@ func TestDeleteRejectsUnconfiguredDistro(t *testing.T) {
 		"--distro", "raspbian", "--suite", "bookworm",
 		"--name", "hello-gz", "--version", "1.0",
 	)
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr, `"raspbian"`,
 		"error should name the offending --distro value")
 	assert.Contains(t, stderr, "config.distros",
@@ -421,7 +421,7 @@ func TestDeleteAcceptsNamespacedDistro(t *testing.T) {
 		"--distro", "customer/acme", "--suite", "stable",
 		"--name", "foo", "--version", "1.0",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Equal(t, 0, rowCount(t, tmpState))
 }
@@ -446,7 +446,7 @@ func TestDeletePoolUnlinksTargetPublicDir(t *testing.T) {
 		"--distro", "debian", "--suite", "bookworm",
 		"--name", "hello-gz", "--version", "1.0",
 	)
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 
 	assert.NoFileExists(t, poolFile, "pool file under public dir must be unlinked")
 	assert.Empty(t, listPoolFiles(t, tmpState), "no .deb should ever land in the state dir")

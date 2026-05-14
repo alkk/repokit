@@ -114,7 +114,7 @@ func TestWriteRelease_Golden(t *testing.T) {
 
 func TestWriteRelease_ArchitecturesExcludesAll(t *testing.T) {
 	meta := ReleaseMeta{
-		Origin:        "r", Label: "r", Suite: "s", Codename: "s", Description: "d",
+		Origin: "r", Label: "r", Suite: "s", Codename: "s", Description: "d",
 		Date:          fixedDate,
 		Architectures: []string{"all", "amd64", "arm64"},
 		Components:    []string{"main"},

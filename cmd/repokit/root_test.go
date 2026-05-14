@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -52,14 +52,14 @@ func TestResolveRepoRoot(t *testing.T) {
 		assert.Equal(t, want, got)
 	})
 
-	t.Run("default applies for non-init when empty returns ErrRepoNotFound", func(t *testing.T) {
+	t.Run("default applies for non-init when empty returns errRepoNotFound", func(t *testing.T) {
 		defaultDir := t.TempDir()
 		t.Setenv(envRepo, "")
 		withDefaultStateDir(t, defaultDir)
 
 		_, err := resolveRepoRoot("", "add")
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrRepoNotFound)
+		assert.ErrorIs(t, err, errRepoNotFound)
 	})
 
 	t.Run("default applies for init even when empty", func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestResolveRepoRoot(t *testing.T) {
 
 		_, err := resolveRepoRoot("", "list")
 		require.Error(t, err, "cwd should be ignored even when it contains repo.db")
-		assert.ErrorIs(t, err, ErrRepoNotFound)
+		assert.ErrorIs(t, err, errRepoNotFound)
 	})
 
 	t.Run("init does not require repo.db", func(t *testing.T) {
@@ -94,19 +94,19 @@ func TestResolveRepoRoot(t *testing.T) {
 		assert.Equal(t, empty, root)
 	})
 
-	t.Run("missing repo.db returns ErrRepoNotFound", func(t *testing.T) {
+	t.Run("missing repo.db returns errRepoNotFound", func(t *testing.T) {
 		empty := t.TempDir()
 
 		_, err := resolveRepoRoot(empty, "list")
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrRepoNotFound)
+		assert.ErrorIs(t, err, errRepoNotFound)
 	})
 }
 
 func TestRunHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--help"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitOK, code)
+	code := run([]string{"--help"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitOK, code)
 	assert.Contains(t, stdout.String(), "Usage:")
 }
 
@@ -118,8 +118,8 @@ func TestRunHelp(t *testing.T) {
 func TestRunCompletionHandler(t *testing.T) {
 	t.Setenv("GO_FLAGS_COMPLETION", "1")
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"i"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"i"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Empty(t, stderr.String(), "stderr must stay clean during completion")
 	out := stdout.String()
 	assert.Contains(t, out, "init")
@@ -133,14 +133,14 @@ func TestRunWithoutCompletionEnvIsUnchanged(t *testing.T) {
 	t.Setenv("GO_FLAGS_COMPLETION", "")
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
 func TestRunUnknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--definitely-not-a-flag"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	code := run([]string{"--definitely-not-a-flag"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitUsage, code)
 	assert.NotEmpty(t, stderr.String())
 }
 
@@ -148,8 +148,8 @@ func TestRunInitWithoutDB(t *testing.T) {
 	dir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.NotContains(t, stderr.String(), "no repo.db")
 }
 
@@ -157,15 +157,15 @@ func TestRunMissingRepoDB(t *testing.T) {
 	dir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", dir, "list"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	code := run([]string{"--repo", dir, "list"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "no repo.db")
 }
 
 func TestRunNoSubcommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run(nil, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitUsage, code)
+	code := run(nil, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitUsage, code)
 }
 
 func TestValidateScopeName(t *testing.T) {
@@ -411,9 +411,9 @@ func TestDistroPathTraversalRejected(t *testing.T) {
 
 				args := append([]string{"--repo", root, "--public", public}, c.args(tc.distro)...)
 				var stdout, stderr bytes.Buffer
-				code := Run(args, &stdout, &stderr, "test-rev")
+				code := run(args, &stdout, &stderr, "test-rev")
 
-				require.NotEqualf(t, ExitOK, code, "expected non-zero exit; stderr=%s", stderr.String())
+				require.NotEqualf(t, exitOK, code, "expected non-zero exit; stderr=%s", stderr.String())
 				assert.Contains(t, stderr.String(), "--distro", "error should name the rejected flag")
 
 				assert.Equal(t, before, snapshotRoot(t, root), "no state-dir mutation expected on a rejected --distro")
@@ -654,9 +654,9 @@ func TestRunPopulatesPublicDirForNeedyCommand(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "--public", public, "verify"},
+	code := run([]string{"--repo", root, "--public", public, "verify"},
 		&stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
 func TestRunUsesEnvPublic(t *testing.T) {
@@ -666,8 +666,8 @@ func TestRunUsesEnvPublic(t *testing.T) {
 	t.Setenv(envPublic, public)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
 func TestRunReadsPublicDirFromConfig(t *testing.T) {
@@ -679,8 +679,8 @@ func TestRunReadsPublicDirFromConfig(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
 func TestRunErrorsWhenPublicMissingForNeedyCommand(t *testing.T) {
@@ -689,8 +689,8 @@ func TestRunErrorsWhenPublicMissingForNeedyCommand(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "public_dir is not set")
 }
 
@@ -707,8 +707,8 @@ func TestRunVerifyToleratesMissingSigningKey(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
 func TestRunSkipsPublicResolutionForListAndInit(t *testing.T) {
@@ -717,14 +717,14 @@ func TestRunSkipsPublicResolutionForListAndInit(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitOK, code, "list should not require --public; stderr=%s", stderr.String())
+	code := run([]string{"--repo", root, "list"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitOK, code, "list should not require --public; stderr=%s", stderr.String())
 
 	stdout.Reset()
 	stderr.Reset()
 	freshRoot := t.TempDir()
-	code = Run([]string{"--repo", freshRoot, "init"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitOK, code, "init should not require --public; stderr=%s", stderr.String())
+	code = run([]string{"--repo", freshRoot, "init"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitOK, code, "init should not require --public; stderr=%s", stderr.String())
 }
 
 // TestRunVerifyWithReplaceMeFallsBackToConfig guards the corner case where
@@ -741,8 +741,8 @@ func TestRunVerifyWithReplaceMeFallsBackToConfig(t *testing.T) {
 	t.Setenv(envPublic, placeholderValue)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
 // TestRunMalformedConfigBlocksAllStateCommands asserts that any command that
@@ -759,9 +759,9 @@ func TestRunMalformedConfigBlocksAllStateCommands(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "--public", public, "verify"},
+	code := run([]string{"--repo", root, "--public", public, "verify"},
 		&stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "loading config")
 }
 
@@ -779,7 +779,7 @@ func TestRunInfoWithoutHomeDir(t *testing.T) {
 	t.Cleanup(func() { defaultStateDir = prev })
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"info", deb}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"info", deb}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "Package:")
 }

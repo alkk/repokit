@@ -99,7 +99,7 @@ func Load(path string) (*Config, error) {
 // two such segments joined by exactly one '/'. Depth >= 3 is rejected. The
 // returned error is context-neutral ("must be ...", "segment ...") so callers
 // can frame it for their own surface — `config.Load` prefixes "config: distros
-// entry %q:" and `pkg/cli` prefixes "--distro %q:".
+// entry %q:" and `cmd/repokit` prefixes "--distro %q:".
 func ValidateDistroName(name string) error {
 	if name == "" {
 		return errors.New("must not be empty")

@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -25,8 +25,8 @@ func TestInitFreshDir(t *testing.T) {
 	root := filepath.Join(dir, "repo")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", root, "init"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", root, "init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	for _, sub := range []string{"pool", "dists"} {
 		_, err := os.Stat(filepath.Join(root, sub))
@@ -59,8 +59,8 @@ func TestInitErrorsIfRepoDBExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, dbFilename), nil, 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	code := run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "already initialized")
 }
 
@@ -70,8 +70,8 @@ func TestInitPreservesExistingConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), custom, 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", dir, "init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	got, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
 	require.NoError(t, err)
@@ -85,8 +85,8 @@ func TestInitWithPositional(t *testing.T) {
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"init", root}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"init", root}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	_, err := os.Stat(filepath.Join(root, dbFilename))
 	require.NoError(t, err)
@@ -114,8 +114,8 @@ func TestInitNonInitCommandRequiresRepoDB(t *testing.T) {
 	withDefaultStateDir(t, empty)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"list"}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	code := run([]string{"list"}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "no repo.db")
 }
 
@@ -125,8 +125,8 @@ func TestInitDefaultsToHomeDir(t *testing.T) {
 	withDefaultStateDir(t, stateDir)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"init"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	_, err := os.Stat(filepath.Join(stateDir, dbFilename))
 	require.NoError(t, err)
@@ -143,8 +143,8 @@ func TestInitPositionalBeatsDefault(t *testing.T) {
 	withDefaultStateDir(t, defaultDir)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"init", explicit}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"init", explicit}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	_, err := os.Stat(filepath.Join(explicit, dbFilename))
 	require.NoError(t, err, "positional path should be initialized")
@@ -159,8 +159,8 @@ func TestInitFlagBeatsDefault(t *testing.T) {
 	withDefaultStateDir(t, defaultDir)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--repo", custom, "init"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"--repo", custom, "init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	_, err := os.Stat(filepath.Join(custom, dbFilename))
 	require.NoError(t, err)
@@ -180,8 +180,8 @@ func TestRunInitWithPositionalWithoutHomeDir(t *testing.T) {
 	t.Cleanup(func() { defaultStateDir = prev })
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"init", root}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"init", root}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	_, err := os.Stat(filepath.Join(root, dbFilename))
 	require.NoError(t, err)
@@ -198,8 +198,8 @@ func TestRunInitWithoutPositionalWithoutHomeDir(t *testing.T) {
 	t.Cleanup(func() { defaultStateDir = prev })
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"init"}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitError, code)
+	code := run([]string{"init"}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "no repo root resolved")
 }
 

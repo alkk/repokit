@@ -22,18 +22,18 @@ Module path: `github.com/alkk/repokit`. Single binary at `cmd/repokit`.
 | `make fmt` | `gofmt -s` + `goimports` (skips `vendor/` and `mocks/`) |
 | `make version` | print the revision string the build would embed |
 
-Run a single test: `go test ./pkg/cli -run TestList -count=1` (use `-race` to
+Run a single test: `go test ./cmd/repokit -run TestList -count=1` (use `-race` to
 match CI). Vendored deps live in `vendor/` — `go build`/`go test` use them
 automatically.
 
 ## Architecture
 
-Subcommand dispatch is centralized in `pkg/cli/root.go` via a single
+Subcommand dispatch is centralized in `cmd/repokit/root.go` via a single
 `jessevdk/go-flags` parser. Each subcommand is a `*Cmd` struct on `Options`
-with its flags as struct tags; `Run()` resolves the state dir + public dir,
+with its flags as struct tags; `run()` resolves the state dir + public dir,
 builds a shared `Context`, and dispatches by `parser.Active.Name`. Adding a
 subcommand means adding a field to `Options`, a case in the `switch`, and a
-`<name>.go` file in `pkg/cli/`.
+`<name>.go` file in `cmd/repokit/`.
 
 `Context` carries the resolved environment for the dispatched subcommand:
 
@@ -43,7 +43,7 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
   `<distro>/dists/`. Set only for `add`, `delete`, `publish`, `verify`
   (`needsPublic` in `root.go`); empty for `init`, `info`, `list`, `search`.
 - `Context.Config` — parsed `config.yaml` (or an empty `*config.Config` when
-  the file is missing). Loaded and validated once in `Run()` for every command
+  the file is missing). Loaded and validated once in `run()` for every command
   except `init` (creates the file) and `info` (never reads state) — see
   `needsConfig`. Subcommand handlers should read `c.Config` instead of
   re-calling `loadConfig(c.Root)`. `Config.Distros` is the authoritative list
@@ -56,7 +56,7 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
 
 Flow of a typical write command (`add`, `delete`, `publish`):
 
-1. `pkg/cli/<cmd>.go` parses flags, validates scope names with
+1. `cmd/repokit/<cmd>.go` parses flags, validates scope names with
    `validateScopeName` / `requireScopeName` (defends against path traversal
    into `dists/`/`pool/` and against Release-header injection; also reserves
    `.new`/`.old` suite suffixes for publish staging). `--distro` is the
@@ -96,20 +96,20 @@ Signing: `pkg/sign/gpg.go` shells out to `gpg` and relies entirely on
 `gpg-agent` for the passphrase — `repokit` never prompts. `pkg/sign/nop.go`
 backs `--no-sign`.
 
-Tests: each `pkg/cli/*.go` has a sibling `*_test.go`. `integration_test.go`
+Tests: each `cmd/repokit/*.go` has a sibling `*_test.go`. `integration_test.go`
 and `integration_realpkg_test.go` (the latter consumes prebuilt fixtures from
 `test-packages/`) exercise full end-to-end repo creation, publish, and
 verify.
 
 Shell completion: `--distro` flags across `add`, `delete`, `publish`,
-`verify`, `info`, `list`, `search` are typed as `cli.DistroName` (a named
+`verify`, `info`, `list`, `search` are typed as `DistroName` (a named
 `string`) so the underlying type can implement go-flags' `Completer`
-interface and serve dynamic values from `config.yaml`. `cli.Run` installs
+interface and serve dynamic values from `config.yaml`. `run` installs
 a custom `parser.CompletionHandler` before `parser.ParseArgs` that writes
 items to the `stdout` writer parameter; this replaces go-flags' default
 "println to process stdout, then `os.Exit(0)`" behaviour and makes
-completion testable through `cli.Run`. The `completion` subcommand
-(`pkg/cli/completion.go`) emits per-shell wrapper scripts embedded via
+completion testable through `run`. The `completion` subcommand
+(`cmd/repokit/completion.go`) emits per-shell wrapper scripts embedded via
 `//go:embed completion/{bash,zsh,fish}.sh`.
 
 ## Gotchas
@@ -145,7 +145,7 @@ completion testable through `cli.Run`. The `completion` subcommand
   a left half carrying more than one `/`.
 - Completion mode (`GO_FLAGS_COMPLETION=1`) is wired through a custom
   `parser.CompletionHandler` that writes to the `stdout` `io.Writer` passed
-  into `cli.Run` and lets the function return `ExitOK`. Without it, go-flags
+  into `run` and lets the function return `exitOK`. Without it, go-flags
   would `fmt.Println` to process stdout and `os.Exit(0)` mid-test. The
   `DistroName.Complete` implementation MUST stay silent on error (no stderr,
   no logging) because any byte on stderr corrupts the shell's TAB display;

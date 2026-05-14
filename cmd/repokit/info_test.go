@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"bytes"
@@ -17,8 +17,8 @@ func TestInfoPrintsControlAndHashes(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"info", deb}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"info", deb}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "Package:      hello-gz")
@@ -40,12 +40,12 @@ func TestInfoComputesPoolPathWhenScopeProvided(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"info",
 		"--distro", "debian", "--suite", "bookworm", "--component", "main",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "Pool path (apt):  pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
@@ -61,12 +61,12 @@ func TestInfoExposesParsedSource(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"info",
 		"--distro", "debian", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "Source:       foo")
@@ -81,8 +81,8 @@ func TestInfoMissingFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"info", missing}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	code := run([]string{"info", missing}, &stdout, &stderr, "test-rev")
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "info:")
 }
 
@@ -93,12 +93,12 @@ func TestInfoRejectsUnsafeScope(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"info",
 		"--distro", "../etc", "--suite", "bookworm",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	assert.Equal(t, ExitError, code)
+	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "--distro")
 }
 
@@ -112,12 +112,12 @@ func TestInfoAcceptsNamespacedDistro(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{
+	code := run([]string{
 		"info",
 		"--distro", "customer/acme", "--suite", "stable",
 		deb,
 	}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 
 	out := stdout.String()
 	assert.Contains(t, out, "Pool path (apt):  pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb")
@@ -133,7 +133,7 @@ func TestInfoDoesNotRequireRepo(t *testing.T) {
 	t.Chdir(empty)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"info", deb}, &stdout, &stderr, "test-rev")
-	require.Equal(t, ExitOK, code, "stderr: %s", stderr.String())
+	code := run([]string{"info", deb}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 	assert.Contains(t, stdout.String(), "Package:      hello-xz")
 }

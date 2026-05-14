@@ -368,17 +368,17 @@ func TestParseControl(t *testing.T) {
 
 func TestIsControlMember(t *testing.T) {
 	cases := map[string]bool{
-		"control.tar":         true,
-		"control.tar.gz":      true,
-		"control.tar.xz":      true,
-		"control.tar.zst":     true,
-		"control.tar.gz/":     true,
-		"control.tar.xz//":    true,
-		"data.tar.gz":         false,
-		"debian-binary":       false,
-		"control":             false,
-		"control.tar.bz2":     false,
-		"":                    false,
+		"control.tar":      true,
+		"control.tar.gz":   true,
+		"control.tar.xz":   true,
+		"control.tar.zst":  true,
+		"control.tar.gz/":  true,
+		"control.tar.xz//": true,
+		"data.tar.gz":      false,
+		"debian-binary":    false,
+		"control":          false,
+		"control.tar.bz2":  false,
+		"":                 false,
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {

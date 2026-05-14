@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"fmt"
@@ -26,9 +26,9 @@ type InfoCmd struct {
 func (cmd *InfoCmd) Execute(c *Context) int {
 	if err := cmd.run(c.Stdout); err != nil {
 		fmt.Fprintf(c.Stderr, "info: %v\n", err)
-		return ExitError
+		return exitError
 	}
-	return ExitOK
+	return exitOK
 }
 
 func (cmd *InfoCmd) run(w io.Writer) error {

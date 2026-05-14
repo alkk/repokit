@@ -1,5 +1,6 @@
-// Package cli wires the repokit subcommands behind a single go-flags parser.
-package cli
+// Command repokit is the repository manager binary; this file wires the
+// subcommands behind a single go-flags parser.
+package main
 
 import (
 	"errors"
@@ -16,9 +17,9 @@ import (
 
 // Exit codes used across all subcommands.
 const (
-	ExitOK           = 0
-	ExitError        = 1
-	ExitUsage        = 2
+	exitOK           = 0
+	exitError        = 1
+	exitUsage        = 2
 	binaryName       = "repokit"
 	dbFilename       = "repo.db"
 	configFilename   = "config.yaml"
@@ -50,9 +51,9 @@ const (
 	fieldSuite  = "suite"
 )
 
-// ErrRepoNotFound is returned when the resolved repo root is missing repo.db
+// errRepoNotFound is returned when the resolved repo root is missing repo.db
 // and the requested command is not init.
-var ErrRepoNotFound = errors.New("no repo.db found at repo root (run 'repokit init' first)")
+var errRepoNotFound = errors.New("no repo.db found at repo root (run 'repokit init' first)")
 
 // defaultStateDir resolves the default state directory (~/.repokit/) when no
 // --repo flag or REPOKIT_ROOT env var is set. It is a package-level var so
@@ -199,16 +200,16 @@ func commandName(p *flags.Parser) string {
 	return p.Active.Name
 }
 
-// Run parses argv and dispatches to the matching subcommand. It returns the
+// run parses argv and dispatches to the matching subcommand. It returns the
 // process exit code so main can call os.Exit cleanly.
-func Run(argv []string, stdout, stderr io.Writer, revision string) int {
+func run(argv []string, stdout, stderr io.Writer, revision string) int {
 	opts := &Options{}
 	parser := flags.NewParser(opts, flags.HelpFlag|flags.PassDoubleDash)
 	parser.Name = binaryName
 	parser.LongDescription = fmt.Sprintf("Minimal Debian repository manager (revision %s).", revision)
 	// Route go-flags completion output through the caller-supplied stdout
 	// writer instead of letting the parser write to os.Stdout and os.Exit(0).
-	// Without this, any test that invokes Run with GO_FLAGS_COMPLETION set
+	// Without this, any test that invokes run with GO_FLAGS_COMPLETION set
 	// would terminate the test binary mid-test.
 	parser.CompletionHandler = func(items []flags.Completion) {
 		for _, it := range items {
@@ -221,32 +222,32 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 		var fe *flags.Error
 		if errors.As(err, &fe) && fe.Type == flags.ErrHelp {
 			fmt.Fprintln(stdout, err.Error())
-			return ExitOK
+			return exitOK
 		}
 		fmt.Fprintln(stderr, err.Error())
-		return ExitUsage
+		return exitUsage
 	}
 	// In completion mode go-flags invoked the handler and returned (nil, nil)
 	// without populating parser.Active. Short-circuit before the "no
 	// subcommand → write help" branch fires.
 	if os.Getenv("GO_FLAGS_COMPLETION") != "" {
-		return ExitOK
+		return exitOK
 	}
 	if len(rest) > 0 {
 		fmt.Fprintf(stderr, "unexpected positional arguments: %v\n", rest)
-		return ExitUsage
+		return exitUsage
 	}
 
 	cmd := commandName(parser)
 	if cmd == "" {
 		parser.WriteHelp(stderr)
-		return ExitUsage
+		return exitUsage
 	}
 
 	root, err := resolveRepoRoot(opts.Repo, cmd)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
-		return ExitError
+		return exitError
 	}
 
 	ctx := &Context{
@@ -260,7 +261,7 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 		cfg, lerr := loadConfig(root)
 		if lerr != nil {
 			fmt.Fprintln(stderr, lerr.Error())
-			return ExitError
+			return exitError
 		}
 		ctx.Config = cfg
 	}
@@ -269,7 +270,7 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 		publicDir, perr := resolvePublicDir(opts.Public, ctx.Config, root)
 		if perr != nil {
 			fmt.Fprintln(stderr, perr.Error())
-			return ExitError
+			return exitError
 		}
 		ctx.PublicDir = publicDir
 	}
@@ -278,7 +279,7 @@ func Run(argv []string, stdout, stderr io.Writer, revision string) int {
 }
 
 // dispatch routes the parsed subcommand to its Execute handler. It is split
-// out of Run so the per-subcommand switch does not push Run's cyclomatic
+// out of run so the per-subcommand switch does not push run's cyclomatic
 // complexity past the linter threshold.
 func dispatch(cmd string, opts *Options, ctx *Context, stderr io.Writer) int {
 	switch cmd {
@@ -302,7 +303,7 @@ func dispatch(cmd string, opts *Options, ctx *Context, stderr io.Writer) int {
 		return opts.Completion.Execute(ctx)
 	default:
 		fmt.Fprintf(stderr, "unknown subcommand: %s\n", cmd)
-		return ExitUsage
+		return exitUsage
 	}
 }
 
@@ -474,7 +475,7 @@ func resolveRepoRoot(flagRepo, cmd string) (string, error) {
 	}
 	if _, err := os.Stat(filepath.Join(abs, dbFilename)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("%w: %s", ErrRepoNotFound, abs)
+			return "", fmt.Errorf("%w: %s", errRepoNotFound, abs)
 		}
 		return "", fmt.Errorf("checking repo at %s: %w", abs, err)
 	}

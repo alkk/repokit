@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -32,18 +32,18 @@ type VerifyCmd struct {
 	GC     bool       `long:"gc" description:"remove orphan pool files (files with no database row)"`
 }
 
-// Execute runs the verify subcommand. Exit code is ExitOK when the scope is
-// clean (after any --gc removal), otherwise ExitError.
+// Execute runs the verify subcommand. Exit code is exitOK when the scope is
+// clean (after any --gc removal), otherwise exitError.
 func (cmd *VerifyCmd) Execute(c *Context) int {
 	report, err := cmd.run(c)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "verify: %v\n", err)
-		return ExitError
+		return exitError
 	}
 	if report.passed(cmd.GC) {
-		return ExitOK
+		return exitOK
 	}
-	return ExitError
+	return exitError
 }
 
 // poolDirName is the literal "pool" segment that sits under each per-distro
