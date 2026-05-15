@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -19,7 +20,28 @@ import (
 var revision = "unknown"
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, revision))
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, resolveVersion()))
+}
+
+// resolveVersion returns the best available version string.
+// priority: ldflags revision → module version from go install → VCS commit hash → "unknown".
+func resolveVersion() string {
+	if revision != "unknown" {
+		return revision
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return revision
+	}
+	if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	for _, s := range bi.Settings {
+		if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+			return s.Value[:7]
+		}
+	}
+	return revision
 }
 
 // Exit codes used across all subcommands.
@@ -182,9 +204,10 @@ func requireConfiguredDistros(cfg *config.Config) error {
 
 // Options holds the global flags and all subcommand groups.
 type Options struct {
-	Repo   string `long:"repo" short:"r" env:"REPOKIT_ROOT" description:"path to repository state dir (defaults to $REPOKIT_ROOT or ~/.repokit/)"`
-	Public string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/delete/publish/verify; falls back to public_dir in config.yaml"`
-	Quiet  bool   `long:"quiet" short:"q" description:"suppress non-error output"`
+	Repo    string `long:"repo" short:"r" env:"REPOKIT_ROOT" description:"path to repository state dir (defaults to $REPOKIT_ROOT or ~/.repokit/)"`
+	Public  string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/delete/publish/verify; falls back to public_dir in config.yaml"`
+	Quiet   bool   `long:"quiet" short:"q" description:"suppress non-error output"`
+	Version bool   `long:"version" short:"v" description:"print version and exit"`
 
 	Init       InitCmd       `command:"init" description:"initialize a new repository"`
 	Add        AddCmd        `command:"add" description:"add one or more .deb packages to a suite"`
@@ -225,6 +248,14 @@ func run(argv []string, stdout, stderr io.Writer, revision string) int {
 	}
 
 	rest, err := parser.ParseArgs(argv)
+	// --version is handled before the error branch so `repokit --version`
+	// (which would otherwise fail go-flags' "specify a command" check) prints
+	// the revision and exits cleanly. opts.Version is populated by ParseArgs
+	// even when it later returns a missing-subcommand error.
+	if opts.Version {
+		fmt.Fprintln(stdout, revision)
+		return exitOK
+	}
 	if err != nil {
 		var fe *flags.Error
 		if errors.As(err, &fe) && fe.Type == flags.ErrHelp {

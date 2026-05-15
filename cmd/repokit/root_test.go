@@ -137,6 +137,18 @@ func TestRunWithoutCompletionEnvIsUnchanged(t *testing.T) {
 	assert.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
+func TestRunVersionFlag(t *testing.T) {
+	for _, flag := range []string{"--version", "-v"} {
+		t.Run(flag, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{flag}, &stdout, &stderr, "test-rev")
+			assert.Equal(t, exitOK, code, "stderr: %s", stderr.String())
+			assert.Equal(t, "test-rev\n", stdout.String())
+			assert.Empty(t, stderr.String())
+		})
+	}
+}
+
 func TestRunUnknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"--definitely-not-a-flag"}, &stdout, &stderr, "test-rev")
