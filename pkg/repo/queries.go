@@ -126,6 +126,25 @@ func (r *Repo) ListConn(ctx context.Context, conn *sql.Conn, filter Filter) ([]P
 	return queryPackages(ctx, conn, filter, "")
 }
 
+// ExistsByFilenameConn reports whether any row in distro references filename,
+// using the supplied writer-locked connection (see WithWriterLock). Filename
+// is the apt-relative form stored in the DB (no leading distro segment).
+// Used to revalidate a pool path the caller is about to unlink: if any row
+// still claims the path, deleting it would orphan that row's committed bytes.
+func (r *Repo) ExistsByFilenameConn(ctx context.Context, conn *sql.Conn, distro, filename string) (bool, error) {
+	row := conn.QueryRowContext(ctx,
+		`SELECT 1 FROM packages WHERE distro = ? AND filename = ? LIMIT 1`,
+		distro, filename)
+	var found int
+	if err := row.Scan(&found); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("checking filename %s/%s: %w", distro, filename, err)
+	}
+	return true, nil
+}
+
 // Search returns rows where query matches name or control text
 // (case-insensitive substring match). Filter further narrows the result set.
 // The search is a linear LIKE scan; acceptable up to thousands of packages.

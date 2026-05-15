@@ -490,6 +490,158 @@ func TestWriteCreatesParentDirectories(t *testing.T) {
 	assert.True(t, info.IsDir())
 }
 
+// TestPruneEmptyParentsFullChain covers the canonical case: every ancestor
+// up to (but not including) <root>/<distro>/pool is empty after Delete
+// took the last .deb out, so the entire chain is swept and the stop
+// boundary is preserved as-is.
+func TestPruneEmptyParentsFullChain(t *testing.T) {
+	root := t.TempDir()
+	rel := DiskPath("debian", Filename("bookworm", "main", "hello", "hello", "1.0", "amd64"))
+	require.NoError(t, Write(root, rel, strings.NewReader("payload")))
+	require.NoError(t, Delete(root, rel))
+
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+
+	assert.NoDirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main"))
+	assert.NoDirExists(t, filepath.Join(root, "debian", "pool", "bookworm"))
+	assert.DirExists(t, filepath.Join(root, "debian", "pool"), "stop boundary must be preserved")
+	assert.DirExists(t, filepath.Join(root, "debian"), "anything above the stop boundary must be preserved")
+}
+
+// TestPruneEmptyParentsPreservesStopBoundary pins that even when the stop
+// boundary itself is empty (no siblings under it after the prune), it is
+// never removed. A future add must be able to recreate shard dirs under it
+// without first re-mkdir'ing the pool root.
+func TestPruneEmptyParentsPreservesStopBoundary(t *testing.T) {
+	root := t.TempDir()
+	rel := DiskPath("debian", Filename("bookworm", "main", "hello", "hello", "1.0", "amd64"))
+	require.NoError(t, Write(root, rel, strings.NewReader("payload")))
+	require.NoError(t, Delete(root, rel))
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+
+	info, err := os.Stat(filepath.Join(root, "debian", "pool"))
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
+// TestPruneEmptyParentsStopsAtOccupiedAncestor covers the ENOTEMPTY
+// termination path: a sibling source dir under the same shard letter keeps
+// that letter dir occupied, so the climb stops there.
+func TestPruneEmptyParentsStopsAtOccupiedAncestor(t *testing.T) {
+	root := t.TempDir()
+	hello := DiskPath("debian", Filename("bookworm", "main", "hello", "hello", "1.0", "amd64"))
+	helmet := DiskPath("debian", Filename("bookworm", "main", "helmet", "helmet", "2.0", "amd64"))
+	require.NoError(t, Write(root, hello, strings.NewReader("a")))
+	require.NoError(t, Write(root, helmet, strings.NewReader("b")))
+	require.NoError(t, Delete(root, hello))
+
+	require.NoError(t, PruneEmptyParents(root, "debian", hello))
+
+	assert.NoDirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "hello"))
+	assert.DirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h", "helmet"))
+	assert.DirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main", "h"))
+	assert.DirExists(t, filepath.Join(root, "debian", "pool", "bookworm", "main"))
+	assert.DirExists(t, filepath.Join(root, "debian", "pool", "bookworm"))
+}
+
+// TestPruneEmptyParentsParentIsBoundary covers a degenerate layout where
+// relPath sits directly under the stop boundary. The parent dir IS the
+// boundary, so the helper must be a no-op.
+func TestPruneEmptyParentsParentIsBoundary(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "debian", "pool"), 0o755))
+	rel := "debian/pool/loose.deb"
+
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+
+	assert.DirExists(t, filepath.Join(root, "debian", "pool"))
+}
+
+// TestPruneEmptyParentsMissingBoundary covers the case where neither the
+// boundary nor any of its ancestors exist on disk yet. The helper must
+// return nil cleanly — the post-condition (nothing empty above the
+// boundary) trivially holds.
+func TestPruneEmptyParentsMissingBoundary(t *testing.T) {
+	root := t.TempDir()
+	rel := DiskPath("debian", Filename("bookworm", "main", "hello", "hello", "1.0", "amd64"))
+
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+}
+
+// TestPruneEmptyParentsRejectsParentSegment covers the defense against a
+// corrupted DB row whose filename, after prefixing with the distro
+// segment, contains a `..` segment. Neither argument is dereferenced for
+// the file itself, but `..` in either would misanchor the climb's
+// starting directory or the stop boundary.
+func TestPruneEmptyParentsRejectsParentSegment(t *testing.T) {
+	root := t.TempDir()
+	relCases := []string{"debian/../config.yaml", "debian/..", "a/../b", "../escape"}
+	for _, rel := range relCases {
+		t.Run("relPath="+rel, func(t *testing.T) {
+			err := PruneEmptyParents(root, "debian", rel)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "..")
+		})
+	}
+	distroCases := []string{"../escape", "customer/..", "a/../b", ".."}
+	for _, distro := range distroCases {
+		t.Run("distro="+distro, func(t *testing.T) {
+			err := PruneEmptyParents(root, distro, "x/pool/y/z.deb")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "..")
+		})
+	}
+}
+
+// TestPruneEmptyParentsMissingParent covers the case where the parent
+// directory of relPath doesn't exist at all (e.g. Delete was a no-op).
+// The helper ascends through ENOENT to find the next existing ancestor
+// and either prunes it or stops at the boundary.
+func TestPruneEmptyParentsMissingParent(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "debian", "pool"), 0o755))
+	rel := DiskPath("debian", Filename("bookworm", "main", "hello", "hello", "1.0", "amd64"))
+
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+
+	assert.DirExists(t, filepath.Join(root, "debian", "pool"))
+}
+
+// TestPruneEmptyParentsIdempotent pins that calling the helper twice in a
+// row is safe — the second call ascends through ENOENT until the boundary
+// and returns nil.
+func TestPruneEmptyParentsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	rel := DiskPath("debian", Filename("bookworm", "main", "hello", "hello", "1.0", "amd64"))
+	require.NoError(t, Write(root, rel, strings.NewReader("payload")))
+	require.NoError(t, Delete(root, rel))
+
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+	require.NoError(t, PruneEmptyParents(root, "debian", rel))
+
+	assert.DirExists(t, filepath.Join(root, "debian", "pool"))
+}
+
+// TestPruneEmptyParentsNamespacedDistro covers the namespaced-distro form:
+// the stop boundary is <root>/customer/acme/pool, and the helper must not
+// climb above it into <root>/customer/.
+func TestPruneEmptyParentsNamespacedDistro(t *testing.T) {
+	root := t.TempDir()
+	rel := DiskPath("customer/acme", Filename("stable", "main", "hello", "hello", "1.0", "amd64"))
+	require.NoError(t, Write(root, rel, strings.NewReader("payload")))
+	require.NoError(t, Delete(root, rel))
+
+	require.NoError(t, PruneEmptyParents(root, "customer/acme", rel))
+
+	assert.NoDirExists(t, filepath.Join(root, "customer", "acme", "pool", "stable", "main", "h", "hello"))
+	assert.NoDirExists(t, filepath.Join(root, "customer", "acme", "pool", "stable"))
+	assert.DirExists(t, filepath.Join(root, "customer", "acme", "pool"), "namespaced stop boundary must be preserved")
+	assert.DirExists(t, filepath.Join(root, "customer", "acme"))
+	assert.DirExists(t, filepath.Join(root, "customer"))
+}
+
 func absPath(root, rel string) string {
 	return filepath.Join(root, filepath.FromSlash(rel))
 }

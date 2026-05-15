@@ -138,6 +138,72 @@ func Delete(root, relPath string) error {
 	return nil
 }
 
+// PruneEmptyParents walks up from the parent directory of relPath, calling
+// os.Remove on each empty ancestor. It stops at <root>/<distro>/pool — the
+// per-distro pool root — and never removes that directory or anything above
+// it. relPath is the same disk-relative form passed to Delete (the output
+// of DiskPath); the file itself is NOT removed here, only its empty
+// ancestors.
+//
+// Termination rules:
+//
+//   - The candidate equals or is shallower than the stop boundary
+//     <root>/<distro>/pool → return nil. The boundary is preserved so a
+//     subsequent add can recreate shard dirs underneath it without
+//     racing an external mkdir of the pool root.
+//   - os.Remove fails with fs.ErrExist → return nil. A sibling file or
+//     directory occupies the ancestor; the walk is done. This is the
+//     normal termination path and MUST NOT be propagated as an error,
+//     otherwise every batch delete that does not empty an entire pool
+//     would surface a spurious warning. fs.ErrExist is the portable
+//     bucket: on Unix os.Remove returns ENOTEMPTY (and on some BSDs
+//     EEXIST), on Windows it returns ERROR_DIR_NOT_EMPTY; syscall.Errno.Is
+//     maps all three to fs.ErrExist.
+//   - os.Remove returns fs.ErrNotExist → ascend (idempotent: a prior call
+//     already removed this dir, or a concurrent gc swept it).
+//   - any other error → wrapped and returned.
+//
+// The hasParentSegment guards reject `..` in either argument even though
+// neither is dereferenced: a corrupted DB row whose filename contains
+// `..`, or a caller passing a `..`-bearing distro, would misanchor either
+// the climb's starting directory or the stop boundary and could ascend
+// past the intended bound.
+func PruneEmptyParents(root, distro, relPath string) error {
+	if hasParentSegment(distro) {
+		return fmt.Errorf("distro %q contains parent (..) segment", distro)
+	}
+	if hasParentSegment(relPath) {
+		return fmt.Errorf("path %q contains parent (..) segment", relPath)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("abs %s: %w", root, err)
+	}
+	stop := filepath.Join(rootAbs, filepath.FromSlash(distro), poolDir)
+	dest := filepath.Join(rootAbs, filepath.FromSlash(relPath))
+	cur := filepath.Dir(dest)
+	for {
+		rel, err := filepath.Rel(stop, cur)
+		if err != nil {
+			return fmt.Errorf("rel %s %s: %w", stop, cur, err)
+		}
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil
+		}
+		if err := os.Remove(cur); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return nil
+			}
+			if errors.Is(err, fs.ErrNotExist) {
+				cur = filepath.Dir(cur)
+				continue
+			}
+			return fmt.Errorf("removing %s: %w", filepath.ToSlash(rel), err)
+		}
+		cur = filepath.Dir(cur)
+	}
+}
+
 // SafeJoin resolves relPath against root and returns the absolute path,
 // rejecting inputs whose resolved path escapes root via `..` segments or
 // absolute components. Pool-relative paths are stored in the DB and walked

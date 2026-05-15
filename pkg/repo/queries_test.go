@@ -306,6 +306,41 @@ func TestDelete(t *testing.T) {
 	})
 }
 
+func TestExistsByFilenameConn(t *testing.T) {
+	r := openTempRepo(t)
+	ctx := context.Background()
+
+	a := samplePackage("debian", "bookworm", "main", "amd64", "alpha", "1.0")
+	b := samplePackage("ubuntu", "noble", "main", "amd64", "alpha", "1.0")
+	b.Filename = a.Filename // same filename in a different distro
+	insertAll(t, r, a, b)
+
+	tests := []struct {
+		name     string
+		distro   string
+		filename string
+		want     bool
+	}{
+		{"matches in distro", "debian", a.Filename, true},
+		{"distro scopes the match", "ubuntu", a.Filename, true},
+		{"different distro with same filename does not bleed", "fedora", a.Filename, false},
+		{"unknown filename returns false", "debian", "pool/bookworm/main/x/missing/missing_1.0_amd64.deb", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
+				got, qerr := r.ExistsByFilenameConn(ctx, conn, tc.distro, tc.filename)
+				if qerr != nil {
+					return qerr
+				}
+				assert.Equal(t, tc.want, got)
+				return nil
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestDeleteRollsBackOnError(t *testing.T) {
 	r := openTempRepo(t)
 	ctx := context.Background()

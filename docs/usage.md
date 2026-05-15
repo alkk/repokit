@@ -157,6 +157,13 @@ repokit delete --distro <d> --suite <s> [filters...] [--all-versions] [--dry-run
 \* At least one of `--name` or `--sha256` is required to prevent a typo from
 wiping a whole suite.
 
+After each pool file is removed, empty ancestor directories under
+`<distro>/pool/<suite>/<comp>/<letter>/<src>/` are pruned up to — but not
+including — `<distro>/pool/`. The per-distro pool root is always preserved
+so a subsequent `add` can recreate shard directories under it. Prune
+failures are non-fatal and surface on stderr as `prune: <error>`; the DB
+row and the unlink are already committed by that point.
+
 ### `list`
 
 Print packages matching the supplied filters.
@@ -261,7 +268,10 @@ counts summary. Exit code is 0 when the scope is clean (after any `--gc`
 removals), 1 otherwise.
 
 `--gc` never deletes DB rows that point at a missing pool file — that
-resolution requires a manual decision.
+resolution requires a manual decision. After each orphan is removed,
+empty ancestor directories are pruned up to (but not including)
+`<distro>/pool/`, mirroring `delete`. Prune failures are warned on stderr
+as `prune: <error>` and do not abort the GC run.
 
 Files under `pool/` whose names end in `.tmp` or `.bak` are transient
 artifacts of an in-flight or crashed `add`. They are not reported as orphans

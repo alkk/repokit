@@ -166,7 +166,7 @@ func (cmd *VerifyCmd) verifyAndGC(
 	if err := cmd.scanOrphansForScope(publicDir, distros, known, report); err != nil {
 		return err
 	}
-	return removeOrphans(publicDir, report.Orphans)
+	return removeOrphans(publicDir, report.Orphans, distros, stderr)
 }
 
 // filterRowsByConfiguredDistros drops rows whose distro is not in distros and
@@ -339,15 +339,46 @@ func scopePoolDir(distro, suite string) string {
 	return distro + "/" + poolDirName
 }
 
-// removeOrphans deletes the listed pool files. pool.Delete is idempotent so a
-// second call would be a no-op; we still surface real I/O errors.
-func removeOrphans(publicDir string, orphans []string) error {
+// removeOrphans deletes the listed pool files and prunes the now-empty
+// ancestor directories up to (but not including) <publicDir>/<distro>/pool.
+// pool.Delete is idempotent so a second call would be a no-op; we still
+// surface real I/O errors. Prune errors are non-fatal (the file is gone,
+// the DB row is gone, a leftover empty dir is cosmetic) and are warned to
+// stderr.
+func removeOrphans(publicDir string, orphans, distros []string, stderr io.Writer) error {
 	for _, p := range orphans {
 		if err := pool.Delete(publicDir, p); err != nil {
 			return fmt.Errorf("removing orphan %s: %w", p, err)
 		}
+		distro := matchOrphanDistro(p, distros)
+		if distro == "" {
+			continue
+		}
+		if err := pool.PruneEmptyParents(publicDir, distro, p); err != nil {
+			fmt.Fprintf(stderr, "prune: %v\n", err)
+		}
 	}
 	return nil
+}
+
+// matchOrphanDistro returns the configured distro whose <distro>/pool/
+// prefix matches p, or "" if none does. Picks the longest match so a plain
+// "customer" never shadows a namespaced "customer/acme" — required because
+// namespaced distros (`customer/acme`) contain a `/` and a naive
+// strings.Cut on the first `/` would mis-anchor the prune stop boundary at
+// <publicDir>/customer/pool, potentially letting the climb remove
+// <publicDir>/customer/acme/pool itself. The config loader already rejects
+// a plain-prefix collision like [customer, customer/acme]; the longest-
+// match logic here is defense in depth.
+func matchOrphanDistro(p string, distros []string) string {
+	best := ""
+	for _, d := range distros {
+		prefix := d + "/" + poolDirName + "/"
+		if strings.HasPrefix(p, prefix) && len(d) > len(best) {
+			best = d
+		}
+	}
+	return best
 }
 
 // printReport writes one line per finding plus a final status. Findings are

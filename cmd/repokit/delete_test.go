@@ -138,6 +138,87 @@ func TestDeleteAllVersions(t *testing.T) {
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Equal(t, 1, rowCount(t, tmpState))
+
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz"),
+		"emptied source shard dir must be pruned after the last package leaves it")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello"),
+		"sibling source dir under the same letter shard must remain (hello-xz still lives there)")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h"),
+		"letter-shard ancestor must remain while a sibling source dir is still occupied")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm"),
+		"suite dir must remain while any package still lives under it")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool"),
+		"per-distro pool root must never be pruned (stop boundary)")
+}
+
+// TestDeletePrunesEntireSuite covers the full-sweep case: when the last
+// package leaves a suite, the per-suite tree must be pruned all the way up
+// to (but not including) <publicDir>/<distro>/pool/. The stop-boundary
+// directory must survive so a subsequent add can recreate shards under it
+// without racing an external mkdir.
+func TestDeletePrunesEntireSuite(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	code, _, stderr := runDelete(t, tmpState, tmpPublic,
+		"--distro", "debian", "--suite", "bookworm",
+		"--name", "hello-gz", "--version", "1.0",
+	)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm"),
+		"emptied suite subtree must be pruned all the way up")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool"),
+		"per-distro pool root must be preserved as the stop boundary")
+	assert.NotContains(t, stderr, "prune:", "no prune warning expected on the happy path")
+}
+
+// TestDeleteNamespacedDistroPrunes covers the namespaced-distro variant of
+// the full-sweep case: pruning a `customer/acme` chain must terminate at
+// <publicDir>/customer/acme/pool/, NOT at <publicDir>/customer/pool/. A
+// naive first-slash split of the disk path would mis-anchor the stop
+// boundary and could remove customer/acme/pool/ itself.
+func TestDeleteNamespacedDistroPrunes(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	appendTestDistros(t, tmpState, "customer/acme")
+
+	filename := "pool/stable/main/f/foo/foo_1.0_amd64.deb"
+	poolFile := filepath.Join(tmpPublic, "customer", "acme", filepath.FromSlash(filename))
+	require.NoError(t, os.MkdirAll(filepath.Dir(poolFile), 0o755))
+	require.NoError(t, os.WriteFile(poolFile, []byte("body"), 0o644))
+
+	insertPackage(t, tmpState, repo.Package{
+		Distro:       "customer/acme",
+		Suite:        "stable",
+		Component:    "main",
+		Architecture: "amd64",
+		Name:         "foo",
+		Version:      "1.0",
+		Filename:     filename,
+		Size:         4,
+		MD5:          "00000000000000000000000000000000",
+		SHA1:         "0000000000000000000000000000000000000000",
+		SHA256:       "0000000000000000000000000000000000000000000000000000000000000000",
+		SHA512: "00000000000000000000000000000000000000000000000000000000000000000" +
+			"0000000000000000000000000000000000000000000000000000000000000000",
+		Control: "Package: foo\nVersion: 1.0\nArchitecture: amd64\n",
+	})
+
+	code, _, stderr := runDelete(t, tmpState, tmpPublic,
+		"--distro", "customer/acme", "--suite", "stable",
+		"--name", "foo", "--all-versions",
+	)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+
+	assert.NoFileExists(t, poolFile, "deleted pool file must be gone")
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool", "stable"),
+		"emptied suite subtree must be pruned under the namespaced distro")
+	assert.DirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool"),
+		"namespaced pool root must be preserved (stop boundary anchored at customer/acme/pool, not customer/pool)")
 }
 
 func TestDeleteDryRunMakesNoChanges(t *testing.T) {

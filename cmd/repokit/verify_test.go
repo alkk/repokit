@@ -112,6 +112,116 @@ func TestVerifyGCRemovesOnlyOrphan(t *testing.T) {
 	assert.NoFileExists(t, orphan, "--gc must remove orphan")
 	assert.FileExists(t, legit, "--gc must leave legit pool files in place")
 	assert.Equal(t, 1, rowCount(t, tmpState), "--gc must not touch DB rows")
+
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost"),
+		"emptied orphan source dir must be pruned after --gc removes its only file")
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g"),
+		"emptied letter shard must be pruned when its only source dir is gone")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz"),
+		"sibling source dir under a different letter shard must remain")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm"),
+		"suite dir must remain while a sibling letter shard is still occupied")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool"),
+		"per-distro pool root must never be pruned (stop boundary)")
+}
+
+// TestVerifyGCKeepsSiblingTreeIntact guards against the prune helper
+// climbing past the first still-occupied ancestor. An orphan and a
+// legitimate file under the same letter shard (different source dirs) must
+// leave the shared shard dir intact after --gc removes the orphan.
+func TestVerifyGCKeepsSiblingTreeIntact(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "ghost-h",
+		"ghost-h_1.0_amd64.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
+	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "ghost-h_1.0_amd64.deb (removed)")
+
+	assert.NoFileExists(t, orphan)
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "ghost-h"),
+		"emptied orphan source dir must be pruned")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz"),
+		"sibling source dir under the same letter shard must remain")
+	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h"),
+		"shared letter shard must remain while a sibling source dir is still occupied")
+}
+
+// TestVerifyGCPrunesNamespacedDistro guards the namespaced-distro arm of the
+// orphan prune path: `customer/acme/pool/...` must anchor its stop boundary
+// at <publicDir>/customer/acme/pool, NOT at <publicDir>/customer/pool. A
+// naive first-slash split (strings.Cut on `/`) would mis-anchor and could
+// remove customer/acme/pool/ itself.
+func TestVerifyGCPrunesNamespacedDistro(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	appendTestDistros(t, tmpState, "customer/acme")
+
+	orphan := filepath.Join(tmpPublic, "customer", "acme", "pool", "stable", "main", "g", "ghost",
+		"ghost_1.0_amd64.deb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
+	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "orphan customer/acme/pool/stable/main/g/ghost/ghost_1.0_amd64.deb (removed)")
+
+	assert.NoFileExists(t, orphan)
+	assert.NoDirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool", "stable"),
+		"emptied suite subtree under namespaced distro must be pruned")
+	assert.DirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool"),
+		"namespaced pool root must be preserved (stop boundary at customer/acme/pool, not customer/pool)")
+	assert.NotContains(t, stderr, "prune:", "no prune warning expected on the happy path")
+}
+
+// TestMatchOrphanDistro is a focused unit test for the longest-prefix
+// matcher used by removeOrphans. Plain prefixes must not shadow namespaced
+// ones; an unmatched path returns "" so the prune is skipped.
+func TestMatchOrphanDistro(t *testing.T) {
+	distros := []string{"debian", "customer", "customer/acme"}
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "plain distro",
+			path: "debian/pool/bookworm/main/h/hello/hello_1.0_amd64.deb",
+			want: "debian",
+		},
+		{
+			name: "namespaced distro wins over plain prefix",
+			path: "customer/acme/pool/stable/main/f/foo/foo_1.0_amd64.deb",
+			want: "customer/acme",
+		},
+		{
+			name: "plain prefix matches when path is not namespaced",
+			path: "customer/pool/stable/main/f/foo/foo_1.0_amd64.deb",
+			want: "customer",
+		},
+		{
+			name: "no match returns empty",
+			path: "raspbian/pool/bullseye/main/f/foo/foo_1.0_armhf.deb",
+			want: "",
+		},
+		{
+			name: "missing /pool/ segment returns empty",
+			path: "debian/something-else/file.deb",
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, matchOrphanDistro(tc.path, distros))
+		})
+	}
 }
 
 func TestVerifyGCDoesNotRemoveRowsForMissingPoolFiles(t *testing.T) {

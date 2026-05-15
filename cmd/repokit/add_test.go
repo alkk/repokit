@@ -475,6 +475,86 @@ func TestAddReplaceSweepsOldPoolFileOnSourceChange(t *testing.T) {
 		"debian/pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")),
 		"new pool file must exist at the canonical Source-derived shard")
 	assert.Equal(t, 1, rowCount(t, tmpState), "DB must hold exactly one row after replace")
+	assert.NoDirExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/w/wrong-source")),
+		"empty prior-shard <src> dir must be pruned after sweep")
+	assert.NoDirExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/w")),
+		"empty prior-shard <letter> dir must be pruned after sweep")
+	assert.DirExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main")),
+		"still-occupied <component> dir must remain (new shard f/foo lives under it)")
+}
+
+// TestAddReplacePreservesPoolFileClaimedByAnotherRow exercises the
+// commit-to-WithWriterLock window race: between r.Tx committing and the
+// stale-sweep callback acquiring the writer lock, a concurrent writer
+// can bind a new row to one of our staleReplaced paths. The cleanup must
+// revalidate under the lock and skip the unlink when any row references
+// the path — without that guard, a concurrent add --replace bouncing the
+// source field back and forth would silently destroy canonical pool bytes
+// belonging to the live row. The race is hard to drive with two real
+// processes, so we approximate it by pre-seeding a second row (different
+// NVRA, same filename) that simulates the state the concurrent writer
+// would have committed before our cleanup ran.
+func TestAddReplacePreservesPoolFileClaimedByAnotherRow(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-zst_1.0_amd64.deb") // Source: foo → shard f/foo
+
+	staleFilename := "pool/bookworm/main/w/wrong-source/hello-zst_1.0_amd64.deb"
+	stalePool := filepath.Join(tmpPublic, filepath.FromSlash("debian/"+staleFilename))
+	require.NoError(t, os.MkdirAll(filepath.Dir(stalePool), 0o755))
+	require.NoError(t, os.WriteFile(stalePool, []byte("claimed-by-other-row"), 0o644))
+
+	// Row that --replace will evict; its filename is the about-to-be-stale path.
+	insertPackage(t, tmpState, repo.Package{
+		Distro:       "debian",
+		Suite:        "bookworm",
+		Component:    "main",
+		Architecture: "amd64",
+		Name:         "hello-zst",
+		Version:      "1.0",
+		Filename:     staleFilename,
+		Size:         20,
+		MD5:          "00000000000000000000000000000000",
+		SHA1:         "0000000000000000000000000000000000000000",
+		SHA256:       "0000000000000000000000000000000000000000000000000000000000000000",
+		SHA512:       strings.Repeat("0", 128),
+		Control:      "Package: hello-zst\nVersion: 1.0\nArchitecture: amd64\n",
+	})
+	// Independent row claiming the same filename — stands in for the row a
+	// concurrent add --replace would have committed in the commit-to-lock window.
+	insertPackage(t, tmpState, repo.Package{
+		Distro:       "debian",
+		Suite:        "bookworm",
+		Component:    "main",
+		Architecture: "amd64",
+		Name:         "racer",
+		Version:      "1.0",
+		Filename:     staleFilename,
+		Size:         20,
+		MD5:          "11111111111111111111111111111111",
+		SHA1:         "1111111111111111111111111111111111111111",
+		SHA256:       "1111111111111111111111111111111111111111111111111111111111111111",
+		SHA512:       strings.Repeat("1", 128),
+		Control:      "Package: racer\nVersion: 1.0\nArchitecture: amd64\n",
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm", "--replace",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
+
+	assert.FileExists(t, stalePool,
+		"pool file must be preserved when another row references it (concurrent re-add race)")
+	assert.FileExists(t, filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/f/foo/hello-zst_1.0_amd64.deb")),
+		"new pool file must exist at the canonical Source-derived shard")
 }
 
 // TestAddReplaceClearsStaleBackup covers the crash-after-commit recovery:

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/alkk/repokit/pkg/deb"
 	"github.com/alkk/repokit/pkg/pool"
@@ -138,14 +139,8 @@ func (cmd *AddCmd) run(c *Context) error {
 		}
 	}
 
-	// Sweep orphaned pool files left over when --replace points at a different
-	// shard than the new path. The DB has already committed, so a failure here
-	// is a benign cleanup hiccup (verify --gc reclaims the orphan); warn rather
-	// than reporting the whole add as failed.
-	for _, p := range staleReplaced {
-		if err := pool.Delete(c.PublicDir, p); err != nil {
-			fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, err)
-		}
+	if len(staleReplaced) > 0 {
+		cmd.sweepStaleReplaced(ctx, c, r, staleReplaced)
 	}
 
 	if !c.Quiet {
@@ -158,6 +153,53 @@ func (cmd *AddCmd) run(c *Context) error {
 			msg, string(cmd.Distro), cmd.Suite, string(cmd.Distro), cmd.Suite)
 	}
 	return nil
+}
+
+// sweepStaleReplaced removes pool files orphaned when --replace pointed at a
+// different shard than the new path (e.g. the .deb's Source field changed
+// between versions). The DB has already committed, so a failure here is a
+// benign cleanup hiccup that verify --gc can reclaim; warn rather than
+// reporting the whole add as failed. Empty parents are pruned after each
+// successful unlink so a Source-field change does not leave behind an empty
+// shard subtree that verify --gc cannot reach (no orphan, no row).
+//
+// The cleanup runs under the SQLite writer lock for two reasons. First, once
+// inside the callback no concurrent writer can MkdirAllSync our shard and
+// then have our prune remove it before streamToTmp creates dest.tmp. Second,
+// r.Tx already committed, opening a window between commit and lock
+// acquisition during which a concurrent add --replace can commit a row that
+// binds back to one of our staleReplaced paths; an unconditional pool.Delete
+// would then remove canonical bytes for that live row. ExistsByFilenameConn
+// closes the window: under the lock the DB snapshot is fixed, so a "no row
+// references this path" answer is authoritative until we release the lock.
+func (cmd *AddCmd) sweepStaleReplaced(
+	ctx context.Context, c *Context, r *repo.Repo, staleReplaced []string,
+) {
+	lockErr := r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
+		distroPrefix := string(cmd.Distro) + "/"
+		for _, p := range staleReplaced {
+			filename := strings.TrimPrefix(p, distroPrefix)
+			owned, qerr := r.ExistsByFilenameConn(ctx, conn, string(cmd.Distro), filename)
+			if qerr != nil {
+				fmt.Fprintf(c.Stderr, "warning: revalidating replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, qerr)
+				continue
+			}
+			if owned {
+				continue
+			}
+			if err := pool.Delete(c.PublicDir, p); err != nil {
+				fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, err)
+				continue
+			}
+			if err := pool.PruneEmptyParents(c.PublicDir, string(cmd.Distro), p); err != nil {
+				fmt.Fprintf(c.Stderr, "prune: %v\n", err)
+			}
+		}
+		return nil
+	})
+	if lockErr != nil {
+		fmt.Fprintf(c.Stderr, "warning: stale-replacement cleanup: %v — run 'repokit verify --gc' to reclaim\n", lockErr)
+	}
 }
 
 // processOne executes the per-item flow inside the surrounding transaction:

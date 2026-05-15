@@ -137,11 +137,15 @@ func (cmd *DeleteCmd) runDelete(ctx context.Context, c *Context, r *repo.Repo, f
 		}
 		deleted = rows
 		for i, p := range deleted {
-			if err := pool.Delete(c.PublicDir, pool.DiskPath(p.Distro, p.Filename)); err != nil {
+			rel := pool.DiskPath(p.Distro, p.Filename)
+			if err := pool.Delete(c.PublicDir, rel); err != nil {
 				poolErr = err
 				poolErrIdx = i
 				//nolint:nilerr // intentional: keep the DB delete committed so partial pool failures leave only orphans (recoverable via verify --gc), not rows pointing at missing files
 				return nil
+			}
+			if err := pool.PruneEmptyParents(c.PublicDir, p.Distro, rel); err != nil {
+				fmt.Fprintf(c.Stderr, "prune: %v\n", err)
 			}
 		}
 		return nil

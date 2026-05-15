@@ -215,21 +215,21 @@ slice.
 - Modify: `pkg/pool/pool.go`
 - Modify: `pkg/pool/pool_test.go`
 
-- [ ] add `PruneEmptyParents(root, distro, relPath string) error` to `pkg/pool/pool.go`
-- [ ] reuse `hasParentSegment` for `..` rejection (defense in depth: the path is not dereferenced, but a `..` would misanchor the climb's starting point)
-- [ ] compute stop boundary as `filepath.Join(rootAbs, distro, poolDir)`; never remove it
-- [ ] use `errors.Is(err, syscall.ENOTEMPTY)` to detect normal termination (works on Linux/macOS/Windows — Go's `syscall` maps Windows `ERROR_DIR_NOT_EMPTY` to the same sentinel); `errors.Is(err, fs.ErrNotExist)` to ascend through already-removed dirs (idempotency)
-- [ ] add a doc comment explaining (a) the stop boundary, (b) why `ENOTEMPTY` is treated as success, (c) why the `..` guard is needed even though `relPath` is not dereferenced
-- [ ] write unit test: full empty chain pruned up to (but not including) stop boundary
-- [ ] write unit test: stop boundary directory itself is preserved when its children are pruned
-- [ ] write unit test: non-empty sibling stops the climb at the right level (deeper dirs gone, occupied ancestor remains)
-- [ ] write unit test: parent of `relPath` IS the stop boundary (file lives directly under `<distro>/pool/`) — helper is a no-op, boundary preserved
-- [ ] write unit test: stop boundary directory does not exist yet — helper returns nil cleanly
-- [ ] write unit test: `..` segment in `relPath` rejected with error
-- [ ] write unit test: missing parent dir is a no-op (no error)
-- [ ] write unit test: idempotent — second call after the chain is gone returns nil
-- [ ] write unit test: namespaced distro (`customer/acme`) — chain pruned correctly, `<publicDir>/customer/acme/pool/` preserved as stop boundary
-- [ ] run `go test ./pkg/pool/... -race -count=1` — must pass before next task
+- [x] add `PruneEmptyParents(root, distro, relPath string) error` to `pkg/pool/pool.go`
+- [x] reuse `hasParentSegment` for `..` rejection (defense in depth: the path is not dereferenced, but a `..` would misanchor the climb's starting point)
+- [x] compute stop boundary as `filepath.Join(rootAbs, distro, poolDir)`; never remove it
+- [x] use `errors.Is(err, syscall.ENOTEMPTY)` to detect normal termination (works on Linux/macOS/Windows — Go's `syscall` maps Windows `ERROR_DIR_NOT_EMPTY` to the same sentinel); `errors.Is(err, fs.ErrNotExist)` to ascend through already-removed dirs (idempotency)
+- [x] add a doc comment explaining (a) the stop boundary, (b) why `ENOTEMPTY` is treated as success, (c) why the `..` guard is needed even though `relPath` is not dereferenced
+- [x] write unit test: full empty chain pruned up to (but not including) stop boundary
+- [x] write unit test: stop boundary directory itself is preserved when its children are pruned
+- [x] write unit test: non-empty sibling stops the climb at the right level (deeper dirs gone, occupied ancestor remains)
+- [x] write unit test: parent of `relPath` IS the stop boundary (file lives directly under `<distro>/pool/`) — helper is a no-op, boundary preserved
+- [x] write unit test: stop boundary directory does not exist yet — helper returns nil cleanly
+- [x] write unit test: `..` segment in `relPath` rejected with error
+- [x] write unit test: missing parent dir is a no-op (no error)
+- [x] write unit test: idempotent — second call after the chain is gone returns nil
+- [x] write unit test: namespaced distro (`customer/acme`) — chain pruned correctly, `<publicDir>/customer/acme/pool/` preserved as stop boundary
+- [x] run `go test ./pkg/pool/... -race -count=1` — must pass before next task
 
 ### Task 2: Wire prune into `delete`
 
@@ -237,12 +237,12 @@ slice.
 - Modify: `cmd/repokit/delete.go`
 - Modify: `cmd/repokit/delete_test.go`
 
-- [ ] in `runDelete`'s loop, after a successful `pool.Delete`, call `pool.PruneEmptyParents(c.PublicDir, p.Distro, pool.DiskPath(p.Distro, p.Filename))`
-- [ ] on prune error, `fmt.Fprintf(c.Stderr, "prune: %v\n", err)`; do NOT break the loop or set `poolErr`/`poolErrIdx`
-- [ ] extend `TestDeleteAllVersions` (or add a sibling case) asserting `<publicDir>/<distro>/pool/<suite>` no longer exists on disk after the delete, AND `<publicDir>/<distro>/pool/` itself remains
-- [ ] add a test case: delete that leaves some packages behind in the same suite — assert the still-populated ancestor dirs are preserved (`<src>/` for a different source under same `<letter>` stays, `<suite>/` stays)
-- [ ] add a test case: namespaced distro — `--distro customer/acme --suite <s> --all-versions ...` removes everything; assert `<publicDir>/customer/acme/pool/<suite>` is gone and `<publicDir>/customer/acme/pool/` remains (regression guard for the namespaced-distro fix in `removeOrphans`, and confirms the helper handles namespaced distros end-to-end)
-- [ ] run `go test ./cmd/repokit/... -race -count=1 -run TestDelete` — must pass before next task
+- [x] in `runDelete`'s loop, after a successful `pool.Delete`, call `pool.PruneEmptyParents(c.PublicDir, p.Distro, pool.DiskPath(p.Distro, p.Filename))`
+- [x] on prune error, `fmt.Fprintf(c.Stderr, "prune: %v\n", err)`; do NOT break the loop or set `poolErr`/`poolErrIdx`
+- [x] extend `TestDeleteAllVersions` (or add a sibling case) asserting `<publicDir>/<distro>/pool/<suite>` no longer exists on disk after the delete, AND `<publicDir>/<distro>/pool/` itself remains
+- [x] add a test case: delete that leaves some packages behind in the same suite — assert the still-populated ancestor dirs are preserved (`<src>/` for a different source under same `<letter>` stays, `<suite>/` stays)
+- [x] add a test case: namespaced distro — `--distro customer/acme --suite <s> --all-versions ...` removes everything; assert `<publicDir>/customer/acme/pool/<suite>` is gone and `<publicDir>/customer/acme/pool/` remains (regression guard for the namespaced-distro fix in `removeOrphans`, and confirms the helper handles namespaced distros end-to-end)
+- [x] run `go test ./cmd/repokit/... -race -count=1 -run TestDelete` — must pass before next task
 
 > Note: the prune-error stderr path is covered by Task 1's `..`-rejection unit test (the only error path that surfaces a non-nil return). A read-only-parent integration test is brittle across platforms and adds no coverage beyond the unit test, so it is intentionally omitted.
 
@@ -252,29 +252,29 @@ slice.
 - Modify: `cmd/repokit/verify.go`
 - Modify: `cmd/repokit/verify_test.go`
 
-- [ ] change `removeOrphans` signature to `removeOrphans(publicDir string, orphans []string, distros []string, stderr io.Writer) error`
-- [ ] add a `matchOrphanDistro` helper that picks the longest configured-distro prefix matching `<distro>/pool/...` — required because namespaced distros (`customer/acme`) contain a `/` and `strings.Cut(p, "/")` would mis-anchor the prune to `<publicDir>/customer/pool`
-- [ ] in `removeOrphans`, after each successful `pool.Delete`, look up the distro via `matchOrphanDistro` and call `pool.PruneEmptyParents(publicDir, distro, p)` (skip if no match, defensively)
-- [ ] on prune error, warn to stderr; continue
-- [ ] update the single caller `verifyAndGC` to pass `stderr` and `distros` (both already in scope)
-- [ ] extend a `--gc` test in `verify_test.go` where the orphan is the only file in its pool subtree — assert the subtree is gone after `--gc`
-- [ ] add a test case: orphan removed, sibling rows still keep their tree intact (regression guard against the helper climbing too far)
-- [ ] add a test case: namespaced distro orphan (`customer/acme/pool/<suite>/...`) — assert `matchOrphanDistro` picks `customer/acme`, the chain is pruned, and `customer/acme/pool/` is preserved
-- [ ] add a unit test for `matchOrphanDistro` directly: longest-prefix wins, no-match returns "", plain distro doesn't shadow a namespaced one
-- [ ] run `go test ./cmd/repokit/... -race -count=1 -run TestVerify` — must pass before next task
+- [x] change `removeOrphans` signature to `removeOrphans(publicDir string, orphans []string, distros []string, stderr io.Writer) error`
+- [x] add a `matchOrphanDistro` helper that picks the longest configured-distro prefix matching `<distro>/pool/...` — required because namespaced distros (`customer/acme`) contain a `/` and `strings.Cut(p, "/")` would mis-anchor the prune to `<publicDir>/customer/pool`
+- [x] in `removeOrphans`, after each successful `pool.Delete`, look up the distro via `matchOrphanDistro` and call `pool.PruneEmptyParents(publicDir, distro, p)` (skip if no match, defensively)
+- [x] on prune error, warn to stderr; continue
+- [x] update the single caller `verifyAndGC` to pass `stderr` and `distros` (both already in scope)
+- [x] extend a `--gc` test in `verify_test.go` where the orphan is the only file in its pool subtree — assert the subtree is gone after `--gc`
+- [x] add a test case: orphan removed, sibling rows still keep their tree intact (regression guard against the helper climbing too far)
+- [x] add a test case: namespaced distro orphan (`customer/acme/pool/<suite>/...`) — assert `matchOrphanDistro` picks `customer/acme`, the chain is pruned, and `customer/acme/pool/` is preserved
+- [x] add a unit test for `matchOrphanDistro` directly: longest-prefix wins, no-match returns "", plain distro doesn't shadow a namespaced one
+- [x] run `go test ./cmd/repokit/... -race -count=1 -run TestVerify` — must pass before next task
 
 ### Task 4: Verify acceptance criteria
 
-- [ ] reproduce the original scenario in an integration test or by hand: add a single package, delete it, assert `<publicDir>/<distro>/pool/<suite>` is gone (but `<publicDir>/<distro>/pool/` remains)
-- [ ] verify `add` after a full prune correctly recreates the shard dirs (`MkdirAllSync` already handles this; this is a smoke check, not a new test)
-- [ ] run `make test` — must pass
-- [ ] run `make lint` — must pass
-- [ ] verify no unrelated test regressions
+- [x] reproduce the original scenario in an integration test or by hand: add a single package, delete it, assert `<publicDir>/<distro>/pool/<suite>` is gone (but `<publicDir>/<distro>/pool/` remains) — covered by `TestDeletePrunesEntireSuite` (delete_test.go:159) and `TestDeleteNamespacedDistroPrunes` (delete_test.go:183)
+- [x] verify `add` after a full prune correctly recreates the shard dirs (`MkdirAllSync` already handles this; this is a smoke check, not a new test) — implicit: every existing add test runs against an empty `tmpPublic` with no pool shards, which is equivalent to the post-prune state; `MkdirAllSync` is exercised by every successful add
+- [x] run `make test` — passed (all 7 packages OK, 83.2% coverage)
+- [x] run `make lint` — passed (0 issues)
+- [x] verify no unrelated test regressions — all packages remain green
 
 ### Task 5: [Final] Wrap up
 
-- [ ] update CLAUDE.md if any new pattern is worth documenting (likely not — this is a localized helper)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] update CLAUDE.md if any new pattern is worth documenting — no update needed; `PruneEmptyParents` is a localized helper that does not introduce a new architectural pattern or gotcha
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
