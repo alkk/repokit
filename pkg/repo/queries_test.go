@@ -193,6 +193,59 @@ func TestList(t *testing.T) {
 	}
 }
 
+func TestListConn(t *testing.T) {
+	r := openTempRepo(t)
+	ctx := context.Background()
+
+	a := samplePackage("debian", "bookworm", "main", "amd64", "alpha", "1.0")
+	b := samplePackage("debian", "bookworm", "main", "arm64", "alpha", "1.0")
+	c := samplePackage("debian", "bookworm", "contrib", "amd64", "beta", "2.0")
+	d := samplePackage("ubuntu", "noble", "main", "amd64", "alpha", "1.0")
+	insertAll(t, r, a, b, c, d)
+
+	listConn := func(t *testing.T, filter Filter) []Package {
+		t.Helper()
+		var rows []Package
+		require.NoError(t, r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
+			var qerr error
+			rows, qerr = r.ListConn(ctx, conn, filter)
+			return qerr
+		}))
+		return rows
+	}
+
+	t.Run("returns the same rows as List for the same filter", func(t *testing.T) {
+		for _, filter := range []Filter{
+			{},
+			{Distro: "debian"},
+			{Suite: "bookworm", Name: "alpha"},
+		} {
+			want, err := r.List(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, want, listConn(t, filter),
+				"ListConn must match List for filter %+v", filter)
+		}
+	})
+
+	t.Run("honors Distro filter", func(t *testing.T) {
+		rows := listConn(t, Filter{Distro: "ubuntu"})
+		require.Len(t, rows, 1)
+		assert.Equal(t, "ubuntu", rows[0].Distro)
+	})
+
+	t.Run("honors Suite filter", func(t *testing.T) {
+		rows := listConn(t, Filter{Suite: "noble"})
+		require.Len(t, rows, 1)
+		assert.Equal(t, "noble", rows[0].Suite)
+	})
+
+	t.Run("honors Name filter", func(t *testing.T) {
+		rows := listConn(t, Filter{Name: "beta"})
+		require.Len(t, rows, 1)
+		assert.Equal(t, "beta", rows[0].Name)
+	})
+}
+
 func TestSearch(t *testing.T) {
 	r := openTempRepo(t)
 	ctx := context.Background()

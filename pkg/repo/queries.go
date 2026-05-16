@@ -127,6 +127,16 @@ func (r *Repo) List(ctx context.Context, filter Filter) ([]Package, error) {
 	return queryPackages(ctx, r.db, filter, "")
 }
 
+// ListConn mirrors List but reads through the supplied writer-locked
+// connection (see WithWriterLock). Callers that take a coherent row
+// snapshot and then write back through the same lock (check --purge-db
+// reads the rows, hashes them, then DeleteConn's the missing ones) must
+// use this so a racing add cannot insert a (row, file) pair between the
+// read and the subsequent deletes. Read-only callers should use List.
+func (r *Repo) ListConn(ctx context.Context, conn *sql.Conn, filter Filter) ([]Package, error) {
+	return queryPackages(ctx, conn, filter, "")
+}
+
 // ExistsByFilenameConn reports whether any row in distro references filename,
 // using the supplied writer-locked connection (see WithWriterLock). Filename
 // is the apt-relative form stored in the DB (no leading distro segment).

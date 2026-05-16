@@ -19,7 +19,7 @@ import (
 //
 // gc is deliberately orphan-only and existence-based: no --name/--sha256
 // surgical filters (that is `delete`'s job) and no hashing (that is
-// `verify`'s job — gc only needs the set of pool paths the DB still knows).
+// `check`'s job — gc only needs the set of pool paths the DB still knows).
 type GcCmd struct {
 	Distro DistroName `long:"distro" description:"limit gc to one distribution (plain like 'debian' or namespaced like 'customer/acme')"`
 	Suite  string     `long:"suite" description:"limit gc to one suite (requires --distro)"`
@@ -79,7 +79,7 @@ func (cmd *GcCmd) run(c *Context) error {
 // pool tree is rooted per distro: a bare --suite has no single subtree to
 // walk. Scope-name failures are usage errors (the operator must fix the flags
 // before any work happens); the configured-distro gate is applied separately
-// in run so an unconfigured --distro maps to exitError, matching verify.
+// in run so an unconfigured --distro maps to exitError, matching check.
 func (cmd *GcCmd) validate() error {
 	if cmd.Suite != "" && cmd.Distro == "" {
 		return fmt.Errorf("%w: --suite requires --distro", errGcUsage)
@@ -101,7 +101,7 @@ func (cmd *GcCmd) runDryRun(ctx context.Context, c *Context, distros []string, r
 	if err != nil {
 		return fmt.Errorf("listing pool refs: %w", err)
 	}
-	orphans, err := cmd.scanOrphans(c.PublicDir, distros, knownPoolSet(refs))
+	orphans, err := scanOrphans(c.PublicDir, string(cmd.Distro), cmd.Suite, distros, knownPoolSet(refs))
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (cmd *GcCmd) runGc(ctx context.Context, c *Context, distros []string, r *re
 		if err != nil {
 			return fmt.Errorf("listing pool refs: %w", err)
 		}
-		orphans, err := cmd.scanOrphans(c.PublicDir, distros, knownPoolSet(refs))
+		orphans, err := scanOrphans(c.PublicDir, string(cmd.Distro), cmd.Suite, distros, knownPoolSet(refs))
 		if err != nil {
 			return err
 		}
@@ -142,20 +142,9 @@ func (cmd *GcCmd) runGc(ctx context.Context, c *Context, distros []string, r *re
 	return nil
 }
 
-// scanOrphans dispatches the orphan walk for both the scoped (--distro set)
-// and unscoped paths. The unscoped path iterates the configured distros from
-// config.yaml — repokit never walks distros the operator has not declared, so
-// unrelated top-level trees under the public dir are left untouched.
-func (cmd *GcCmd) scanOrphans(publicDir string, distros []string, known map[string]struct{}) ([]string, error) {
-	if cmd.Distro != "" {
-		return scanPoolForOrphans(publicDir, string(cmd.Distro), cmd.Suite, known)
-	}
-	return scanPoolForOrphansAcrossDistros(publicDir, distros, known)
-}
-
 // printSummary writes the trailing count line. Per-orphan lines are always
 // printed (even under --quiet) so a gc run stays diagnosable from a script;
-// only this aggregate line is suppressed by --quiet, matching verify.
+// only this aggregate line is suppressed by --quiet, matching check.
 func (cmd *GcCmd) printSummary(c *Context, n int, dryRun bool) {
 	if c.Quiet {
 		return

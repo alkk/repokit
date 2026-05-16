@@ -813,7 +813,7 @@ func TestPublishRequiresSigningKeyWithoutNoSign(t *testing.T) {
 
 // TestPickSignerRejectsWhitespaceKey guards the gpg argv path: a
 // whitespace-only signing_key is tolerated at config-load time (so
-// add/delete/verify don't regress) but must fail before being passed to
+// add/delete/check don't regress) but must fail before being passed to
 // gpg, where it would otherwise produce a confusing late error.
 func TestPickSignerRejectsWhitespaceKey(t *testing.T) {
 	_, err := pickSigner(false, "   ")

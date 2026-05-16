@@ -48,7 +48,7 @@ shows it before running `publish` without `--no-sign`.
 | `list` | list packages matching filters |
 | `search` | substring search by name or description |
 | `publish` | rebuild and sign `<distro>/dists/` for one or more suites |
-| `verify` | rehash pool files and report mismatches/orphans (read-only) |
+| `check` | rehash pool files and report mismatches/orphans (read-only); `--purge-db` deletes rows whose pool file is gone |
 | `gc` | remove orphan pool files (files with no database row) |
 | `info` | inspect a `.deb` without touching the repo |
 | `completion` | print a shell-completion wiring script (`bash`, `zsh`, or `fish`) |
@@ -56,8 +56,9 @@ shows it before running `publish` without `--no-sign`.
 `delete` is database-only — it removes rows but leaves the pool files on
 disk as orphans so the published indexes keep resolving until the next
 `publish`. Reclaim that disk space with the explicit `repokit gc`. The old
-`verify --gc` flag was removed (no deprecation alias): replace any
-`repokit verify --gc` invocation with `repokit gc`.
+`verify --gc` flag was removed and the surrounding command renamed (no
+deprecation alias): replace `repokit verify --gc` with `repokit gc`, and
+`repokit verify` (no flag) with `repokit check`.
 
 See [docs/usage.md](docs/usage.md) for the full flag reference.
 
@@ -95,7 +96,7 @@ signing config and SQLite database — never serve it.
 The state dir is resolved from `--repo` > `$REPOKIT_ROOT` > `~/.repokit/`. The
 current working directory is **not** consulted. Every command except `init`
 and `info` requires a `repo.db` in the resolved state dir; commands that
-touch the public tree (`add`, `publish`, `verify`, `gc`)
+touch the public tree (`add`, `publish`, `check`, `gc`)
 additionally require the public dir to be set and to exist. `delete` is
 database-only and runs without a resolvable public dir.
 
@@ -168,7 +169,7 @@ The tree is fully static — any HTTPS server (S3, nginx, GitHub Pages) will do.
 ## Configuration
 
 The state-dir `config.yaml` lists the distros repokit is allowed to manage.
-Every `--distro` argument to `add`, `delete`, `publish`, `verify`, and `gc`
+Every `--distro` argument to `add`, `delete`, `publish`, `check`, and `gc`
 must appear in this list; an unconfigured value is rejected before any pool
 or dists write. The public dir may hold unrelated top-level directories — those
 are never walked.

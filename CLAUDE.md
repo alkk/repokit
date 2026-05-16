@@ -40,7 +40,7 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
 - `Context.Root` — the **state dir**: holds `repo.db` and `config.yaml`. Set
   for every subcommand.
 - `Context.PublicDir` — the **public dir**: holds `<distro>/pool/` and
-  `<distro>/dists/`. Set only for `add`, `publish`, `verify`, `gc`
+  `<distro>/dists/`. Set only for `add`, `publish`, `check`, `gc`
   (`needsPublic` in `main.go`); empty for `init`, `info`, `list`, `search`,
   `delete` (`delete` is DB-only — it never reads or writes pool/dists, so it
   does not resolve the public dir and an unset `public_dir` cannot block it).
@@ -49,7 +49,7 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
   except `init` (creates the file) and `info` (never reads state) — see
   `needsConfig`. Subcommand handlers should read `c.Config` instead of
   re-calling `loadConfig(c.Root)`. `Config.Distros` is the authoritative list
-  of managed distros; `add`, `delete`, `publish`, `verify`, and `gc` reject
+  of managed distros; `add`, `delete`, `publish`, `check`, and `gc` reject
   `--distro` values not in this list via `requireConfiguredDistro` in
   `main.go`. Distro names may be plain (`debian`) or one-level namespaced
   (`customer/acme`, producing nested `<publicDir>/customer/acme/{pool,dists}/`);
@@ -90,9 +90,14 @@ delete→publish window (no apt `404`s on retired `.deb`s). The orphans are
 reclaimed only by an explicit, operator-driven `repokit gc`
 (`cmd/repokit/gc.go`) — never auto-pruned by `publish`. `gc` reuses the
 shared orphan-walk helpers in `cmd/repokit/orphans.go` and serializes
-against a concurrent `add` with the same writer lock the old `verify --gc`
-held. `verify` is now strictly read-only / reporting and has no `--gc`
-flag.
+against a concurrent `add` with a writer lock spanning the scan. The
+mirror-image drift — a `packages` row whose pool file was removed
+out-of-band, leaving the row pointing at nothing — is resolved by
+`check --purge-db`, which deletes those rows under the same writer-lock
+invariant (`gc` reaps file-without-row; `check --purge-db` reaps
+row-without-file). Plain `check` (no `--purge-db`) stays strictly
+read-only / reporting and resolves nothing — it is the preview you run
+before either reaper.
 
 State-dir resolution: `--repo` > `$REPOKIT_ROOT` > `~/.repokit/` (default).
 The cwd is **not** consulted. Every command except `init` and `info` requires
@@ -112,12 +117,12 @@ Signing: `pkg/sign/gpg.go` shells out to `gpg` and relies entirely on
 backs `--no-sign`.
 
 Tests: each `cmd/repokit/*.go` has a sibling `*_test.go`. `integration_test.go`
-and `integration_realpkg_test.go` (the latter consumes prebuilt fixtures from
-`test-packages/`) exercise full end-to-end repo creation, publish, and
-verify.
+exercises full end-to-end repo creation, publish, and check;
+`integration_realpkg_test.go` drives add + publish against prebuilt
+fixtures from `test-packages/`.
 
 Shell completion: `--distro` flags across `add`, `delete`, `publish`,
-`verify`, `info`, `list`, `search` are typed as `DistroName` (a named
+`check`, `info`, `list`, `search` are typed as `DistroName` (a named
 `string`) so the underlying type can implement go-flags' `Completer`
 interface and serve dynamic values from `config.yaml`. `run` installs
 a custom `parser.CompletionHandler` before `parser.ParseArgs` that writes
@@ -160,14 +165,29 @@ completion testable through `run`. The `completion` subcommand
   pool files; that reintroduces the inconsistency this split was designed
   to remove. Orphan cleanup is an explicit operator responsibility, never
   auto-pruned by `publish`.
-- `verify` is strictly read-only — there is no `--gc` flag (removed pre-1.0
-  with no deprecation alias; orphan removal lives only under `gc`).
-  `verify` reports orphans and exits non-zero so they stay visible; running
-  `repokit gc` is what resolves them. `gc` and the old `verify --gc` share
-  the orphan-walk helpers in `cmd/repokit/orphans.go` and the same
-  writer-lock-spanning-the-scan invariant: an in-flight `add` writes pool
-  bytes before its row commits, so the lock must be held across the walk or
-  a concurrent `add`'s file is misclassified as an orphan and deleted.
+- `check` is read-only **by default** (Mode A): there is no `--gc` flag
+  (removed pre-1.0 with no deprecation alias; orphan removal lives only
+  under `gc`). Plain `check` reports orphans and exits non-zero so they
+  stay visible; running `repokit gc` is what resolves them. `--purge-db`
+  promotes `check` to a writer-locked drift-resolver (Mode B) that deletes
+  rows whose pool file is missing — but hash mismatches are still **never**
+  auto-resolved in either mode (`check` does not delete a row pointing at a
+  wrong file). `gc`, the old `verify --gc`, and `check --purge-db`'s Mode B
+  all share the orphan-walk helpers in `cmd/repokit/orphans.go` and the
+  same writer-lock-spanning-the-scan invariant: an in-flight `add` writes
+  pool bytes before its row commits, so the lock must be held across the
+  walk or a concurrent `add`'s file is misclassified as an orphan and
+  deleted.
+- `check --purge-db` is **missing-only by design**: it deletes rows whose
+  pool file is absent but never a row whose file hashes wrong. A transient
+  FS/mount glitch (an unmounted volume, a half-synced replica) can make a
+  present file look corrupt or absent; auto-deleting on a hash mismatch
+  would silently discard a package's row over a possibly recoverable infra
+  blip and mask the real problem. Mismatches are therefore reported and
+  fail the run; the operator restores the file or runs `repokit delete`
+  manually. This is the deliberate asymmetry to `gc`: `gc` reaps
+  file-without-row, `check --purge-db` reaps row-without-file, and neither
+  touches a hash mismatch.
 - `config.suites` keys are `<distro>/<suite>` and `splitSuiteKey` cuts on the
   **last** `/`, so a namespaced distro's per-suite override key has three
   segments (`customer/acme/stable` → distro `customer/acme`, suite `stable`).

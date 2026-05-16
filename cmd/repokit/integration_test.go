@@ -408,7 +408,7 @@ func TestIntegration_CrossDistroSameSuite(t *testing.T) {
 //
 // Asserts the on-disk layout, all five Release header defaults from
 // defaultSuite (Origin/Label/Suite/Codename/Description), apt-relative
-// Filename in Packages, and that verify exits 0. Also asserts the negative
+// Filename in Packages, and that check exits 0. Also asserts the negative
 // case where add against an unconfigured namespaced distro is rejected by
 // requireConfiguredDistro (the scope validator accepts foo/bar but it is
 // absent from config.distros).
@@ -469,7 +469,7 @@ func TestIntegration_NamespacedDistro(t *testing.T) {
 	assert.NotContains(t, pkgText, "Filename: customer/acme/",
 		"namespaced segment must come from the URI base, not the Filename field")
 
-	runCmd("verify")
+	runCmd("check")
 
 	// Second unscoped publish: now that a live customer/acme/dists/stable/Release
 	// exists on disk, the filesystemScopes half of allScopes (publish.go) is the
@@ -532,7 +532,7 @@ func TestIntegration_Completion(t *testing.T) {
 		out := stdout.String()
 		for _, name := range []string{
 			cmdInit, cmdAdd, cmdDelete, cmdList, cmdSearch,
-			cmdPublish, cmdVerify, cmdInfo, cmdCompletion,
+			cmdPublish, cmdCheck, cmdInfo, cmdCompletion,
 		} {
 			assert.Containsf(t, out, name,
 				"subcommand %q missing from completion output:\n%s", name, out)

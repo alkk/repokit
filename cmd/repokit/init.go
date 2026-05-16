@@ -29,7 +29,7 @@ signing_key: "REPLACE_ME"
 # Point your webserver's docroot at this directory.
 public_dir: "REPLACE_ME"
 
-# Managed distros. Every --distro argument to add/delete/publish/verify
+# Managed distros. Every --distro argument to add/delete/publish/check
 # must appear in this list. Edit before first use.
 distros:
   - debian

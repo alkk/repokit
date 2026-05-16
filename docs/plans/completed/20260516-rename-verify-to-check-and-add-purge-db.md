@@ -247,6 +247,18 @@ difference. The Mode B doc comment must make this explicit; the
 `TestCheck_PurgeDB_OrphanReportingDuringPurge` test asserts a separately
 created orphan is still reported even when purge runs in the same pass.
 
+> **Post-completion correction (codex review):** the "those paths cannot
+> appear as orphans" reasoning silently assumed the filesystem is static
+> between the hash pass and the scan. The writer lock only serializes DB
+> *writers*, not the FS, so an external process (backup restore, re-synced
+> replica, manual `cp`) can recreate a previously-missing pool file in that
+> window. With its row purged, the reappeared file is a genuine orphan that
+> a stale `known` entry would suppress, letting the run exit clean over a
+> fresh on-disk orphan. Fixed in `runPurgeDB` by `delete`-ing every purged
+> row's `pool.DiskPath` from `known` before `scanOrphans`; pinned by
+> `TestCheck_PurgeDB_RestoredFileMidRunSurfacesAsOrphan` (uses the new
+> `purgeScanHook` test seam to inject the restore deterministically).
+
 ## What Goes Where
 
 - **Implementation Steps** (`[ ]` checkboxes): rename + flag + tests +
@@ -265,11 +277,11 @@ Foundation for Mode B's in-lock row read. Mode A keeps using `List`.
 - Modify: `pkg/repo/queries.go`
 - Modify: `pkg/repo/queries_test.go` (or wherever `List` is tested — discover during implementation)
 
-- [ ] add `ListConn(ctx context.Context, conn *sql.Conn, filter Filter) ([]Package, error)` mirroring `PoolRefsConn`
-- [ ] doc-comment the method explaining when callers should prefer `ListConn` over `List` (writer-locked passes that need a coherent snapshot before subsequent writes)
-- [ ] add a unit test that opens a connection via `WithWriterLock`, calls `ListConn`, and asserts it returns the same rows as `List` for the same filter
-- [ ] add a test asserting `ListConn` honours all filter fields (`Distro`, `Suite`, `Name`) at least once
-- [ ] run `make test` — must pass before Task 2
+- [x] add `ListConn(ctx context.Context, conn *sql.Conn, filter Filter) ([]Package, error)` mirroring `PoolRefsConn`
+- [x] doc-comment the method explaining when callers should prefer `ListConn` over `List` (writer-locked passes that need a coherent snapshot before subsequent writes)
+- [x] add a unit test that opens a connection via `WithWriterLock`, calls `ListConn`, and asserts it returns the same rows as `List` for the same filter
+- [x] add a test asserting `ListConn` honours all filter fields (`Distro`, `Suite`, `Name`) at least once
+- [x] run `make test` — must pass before Task 2
 
 ### Task 2: Rename `verify` → `check` (no behavior change)
 
@@ -289,19 +301,19 @@ Pure mechanical rename. No new feature work in this task.
 - Modify: `cmd/repokit/integration_test.go`
 - Modify: `cmd/repokit/integration_realpkg_test.go`
 
-- [ ] move `cmd/repokit/verify.go` → `cmd/repokit/check.go` (use `git mv` for history); inside the file rename `VerifyCmd` → `CheckCmd`, `verifyReport` → `checkReport`, `(cmd *VerifyCmd) verifyOnly` → `(cmd *CheckCmd) checkOnly`, `verifyOne` → `checkOne`, and flip all `verify:` output literals to `check:` (in `printReport`, in error wrappers, and in the `verify: skipping distro ...` stderr line)
-- [ ] in the renamed `check.go`, update the `description:` tags on `Distro` (`"limit verification to one distribution..."` → `"limit check to one distribution..."`) and `Suite` (`"limit verification to one suite..."` → `"limit check to one suite..."`) — the word "verification" is command-coupled and must flip
-- [ ] move `cmd/repokit/verify_test.go` → `cmd/repokit/check_test.go` (`git mv`); flip expected output strings (`"verify: "` → `"check: "`, `"verify:"` → `"check:"`) and command tokens passed to `run` (`"verify"` → `"check"`); rename `TestVerify*` → `TestCheck*`
-- [ ] in `cmd/repokit/main.go`: rename `cmdVerify = "verify"` → `cmdCheck = "check"`; rename the `Options.Verify VerifyCmd ...command:"verify"...` field to `Options.Check CheckCmd ...command:"check"...`; update the `needsPublic` switch case and the `dispatch` switch case; update the help-text mention in `Options.Public`'s `description:` tag (currently lists `add/publish/verify/gc`); update the three comments mentioning verify (lines 106, 152, 196, 381 — `(verify, publish) can pass it through`, `unscoped publish/verify`, `list/search/verify`)
-- [ ] in `cmd/repokit/gc.go`: update three comment mentions of `verify` (lines 22, 82, 158) to `check`
-- [ ] in `cmd/repokit/init.go` line 32: update the embedded `config.yaml` comment (`add/delete/publish/verify` → `add/delete/publish/check`)
-- [ ] in `cmd/repokit/publish.go` line 130: update the comment (`add/delete/verify don't regress` → `add/delete/check don't regress`)
-- [ ] in `pkg/pool/pool.go` line 445: update the comment (`publish would surface the missing pool file via verify` → `... via check`)
-- [ ] in `cmd/repokit/root_test.go`: replace all `"verify"` command tokens (~11 occurrences) with `"check"`, rename helper map keys (`"verify": true` in the dispatcher test), update comment mentions (`publish or verify operate` → `publish or check operate`)
-- [ ] in `cmd/repokit/integration_test.go`: substitute `runCmd("verify")` → `runCmd("check")`, flip `cmdVerify` → `cmdCheck` at line 535 (constant reference in a command-list slice), and update any `verify:`-prefixed expected output and comments mentioning verify
-- [ ] in `cmd/repokit/integration_realpkg_test.go`: substitute `runCmd("verify")` → `runCmd("check")` and any `verify:`-prefixed expected output; update comments mentioning verify
-- [ ] grep the whole repo (`grep -rn "verify\|VerifyCmd\|cmdVerify" cmd pkg README.md docs/`) to catch stragglers (test helper names, log strings, doc mentions) and fix any remaining
-- [ ] run `make test` and `make lint` — must pass before Task 3
+- [x] move `cmd/repokit/verify.go` → `cmd/repokit/check.go` (use `git mv` for history); inside the file rename `VerifyCmd` → `CheckCmd`, `verifyReport` → `checkReport`, `(cmd *VerifyCmd) verifyOnly` → `(cmd *CheckCmd) checkOnly`, `verifyOne` → `checkOne`, and flip all `verify:` output literals to `check:` (in `printReport`, in error wrappers, and in the `verify: skipping distro ...` stderr line)
+- [x] in the renamed `check.go`, update the `description:` tags on `Distro` (`"limit verification to one distribution..."` → `"limit check to one distribution..."`) and `Suite` (`"limit verification to one suite..."` → `"limit check to one suite..."`) — the word "verification" is command-coupled and must flip
+- [x] move `cmd/repokit/verify_test.go` → `cmd/repokit/check_test.go` (`git mv`); flip expected output strings (`"verify: "` → `"check: "`, `"verify:"` → `"check:"`) and command tokens passed to `run` (`"verify"` → `"check"`); rename `TestVerify*` → `TestCheck*`
+- [x] in `cmd/repokit/main.go`: rename `cmdVerify = "verify"` → `cmdCheck = "check"`; rename the `Options.Verify VerifyCmd ...command:"verify"...` field to `Options.Check CheckCmd ...command:"check"...`; update the `needsPublic` switch case and the `dispatch` switch case; update the help-text mention in `Options.Public`'s `description:` tag (currently lists `add/publish/verify/gc`); update the three comments mentioning verify (lines 106, 152, 196, 381 — `(verify, publish) can pass it through`, `unscoped publish/verify`, `list/search/verify`)
+- [x] in `cmd/repokit/gc.go`: update three comment mentions of `verify` (lines 22, 82, 158) to `check`
+- [x] in `cmd/repokit/init.go` line 32: update the embedded `config.yaml` comment (`add/delete/publish/verify` → `add/delete/publish/check`)
+- [x] in `cmd/repokit/publish.go` line 130: update the comment (`add/delete/verify don't regress` → `add/delete/check don't regress`)
+- [x] in `pkg/pool/pool.go` line 445: update the comment (`publish would surface the missing pool file via verify` → `... via check`)
+- [x] in `cmd/repokit/root_test.go`: replace all `"verify"` command tokens (~11 occurrences) with `"check"`, rename helper map keys (`"verify": true` in the dispatcher test), update comment mentions (`publish or verify operate` → `publish or check operate`)
+- [x] in `cmd/repokit/integration_test.go`: substitute `runCmd("verify")` → `runCmd("check")`, flip `cmdVerify` → `cmdCheck` at line 535 (constant reference in a command-list slice), and update any `verify:`-prefixed expected output and comments mentioning verify
+- [x] in `cmd/repokit/integration_realpkg_test.go`: substitute `runCmd("verify")` → `runCmd("check")` and any `verify:`-prefixed expected output; update comments mentioning verify (no `verify` references existed in this file — nothing to substitute)
+- [x] grep the whole repo (`grep -rn "verify\|VerifyCmd\|cmdVerify" cmd pkg README.md docs/`) to catch stragglers (test helper names, log strings, doc mentions) and fix any remaining (code stragglers fixed: `publish_test.go` + `config_test.go` command-coupled `add/delete/verify` comments flipped; remaining `verify` hits in code are generic hash-verification wording, not the command; `README.md`/`docs/`/`CLAUDE.md` doc mentions are deferred to the dedicated Task 4 doc sweep per the plan)
+- [x] run `make test` and `make lint` — must pass before Task 3
 
 ### Task 3: Add `--purge-db` flag and Mode B execution flow
 
@@ -309,21 +321,21 @@ Pure mechanical rename. No new feature work in this task.
 - Modify: `cmd/repokit/check.go`
 - Modify: `cmd/repokit/check_test.go`
 
-- [ ] add `PurgeDB bool` field to `CheckCmd` with `long:"purge-db" description:"delete database rows whose pool file is missing on disk (mismatches are left alone)"`
-- [ ] split `(cmd *CheckCmd) run` into the existing read-only path (Mode A) and a new writer-locked path (Mode B); dispatch on `cmd.PurgeDB`
-- [ ] introduce a helper that walks rows and collects both the existing `report` and a `[]repo.Package` of missing entries — either by parameterising `hashAndIndex` or by adding a sibling helper `hashAndIndexCollecting`; pick whichever keeps the Mode A signature unchanged
-- [ ] inside the `WithWriterLock` callback: `ListConn` rows, scope-filter, run the collecting hash pass, loop missing packages calling `DeleteConn(Filter{Distro,Name,Version,Architecture})`, then run the orphan scan against the pre-purge `known` set (see Technical Details — purged rows pointed at missing files so they cannot appear as orphans regardless; the doc comment must call this out)
-- [ ] note: `scanOrphans` is currently a method on `*GcCmd`. Lift the dispatch helper into `orphans.go` as a package-level function (or copy the four-line dispatch into `check.go` if lifting introduces awkward parameter plumbing). Pick the lower-coupling option during implementation.
-- [ ] teach `(*checkReport).printReport` (or its caller) about a `purged` mode so missing entries print as `purged X` and the summary uses `N purged` instead of `N missing` when `--purge-db` was set
-- [ ] keep `passed()` unchanged — after Mode B purges, `MissingPool` is empty by construction, so the exit-code rule naturally becomes "exit 0 iff no mismatches and no orphans"
-- [ ] add `TestCheck_PurgeDB_RemovesMissingRows`: add a package, remove its pool file from disk, run `check --purge-db`, assert exit 0, summary shows `1 purged`, row is gone from the DB
-- [ ] add `TestCheck_PurgeDB_LeavesMismatchesAlone`: add a package, corrupt its pool file's bytes (truncate or rewrite), run `check --purge-db`, assert exit 1, summary shows `1 mismatch(es)`, row still in DB
-- [ ] add `TestCheck_PurgeDB_ScopedByDistroSuite`: missing files in two distros, run `check --distro X --purge-db`, assert only X's rows are purged
-- [ ] add `TestCheck_PurgeDB_NoMissingNoOp`: no missing files, run `check --purge-db`, assert exit 0, summary shows `0 purged`, no DB writes
-- [ ] add `TestCheck_PurgeDB_MultiRowPerFile`: add the same package into two suites of the same distro (the pool file is shared by both rows); remove the pool file from disk; run `check --purge-db`; assert both rows are gone from the DB in one pass (validates the Suite/Component omission in the `DeleteConn` filter)
-- [ ] add `TestCheck_PurgeDB_OrphanReportingDuringPurge`: stage a real orphan (pool file with no DB row) alongside a missing-file row; run `check --purge-db`; assert the missing row is purged AND the orphan is still reported, summary shows `0 mismatch(es), 1 purged, 1 orphan(s)`, exit 1 (the orphan keeps the run non-clean); validates the pre-purge `known`-set decision in Mode B
-- [ ] skip `TestCheck_PurgeDB_HoldsWriterLock`: the lock invariant is structurally guaranteed by `WithWriterLock`'s contract and a timing-based test would be flaky. If a channel-synchronised contention test pattern is already established in `gc_test.go` or elsewhere, adopt it; otherwise rely on the structural guarantee and skip this case
-- [ ] run `make test` and `make race` — must pass before Task 4
+- [x] add `PurgeDB bool` field to `CheckCmd` with `long:"purge-db" description:"delete database rows whose pool file is missing on disk (mismatches are left alone)"`
+- [x] split `(cmd *CheckCmd) run` into the existing read-only path (Mode A) and a new writer-locked path (Mode B); dispatch on `cmd.PurgeDB` (new `runPurgeDB`)
+- [x] introduce a helper that walks rows and collects both the existing `report` and a `[]repo.Package` of missing entries — added sibling `hashAndIndexCollecting` returning `(known, missing, err)`; `hashAndIndex` now delegates to it, so the Mode A signature is unchanged. `checkOne` now returns `(absent bool, err error)`.
+- [x] inside the `WithWriterLock` callback: `ListConn` rows, scope-filter, run the collecting hash pass, loop missing packages calling `DeleteConn(Filter{Distro,Name,Version,Architecture})`, then run the orphan scan against the pre-purge `known` set — the runPurgeDB doc comment calls out the pre-purge-known rationale explicitly
+- [x] note: lifted the `scanOrphans` dispatch into `orphans.go` as a package-level `scanOrphans(publicDir, distro, suite, distros, known)` (lower-coupling option); removed the `(*GcCmd) scanOrphans` method and updated gc.go's two call sites and check.go's `checkOnly` to use it
+- [x] teach `(*checkReport).printReport` about a `purged` mode (reads `cmd.PurgeDB`): missing entries print as `purged X`, the summary uses `N purged`, and like gc the count line is always emitted in purge mode (added `checkReport.Purged`, populated by moving `MissingPool` after the deletes commit)
+- [x] keep `passed()` unchanged — `Purged` is intentionally excluded from it, so after Mode B purges the exit-code rule is "exit 0 iff no mismatches and no orphans"
+- [x] add `TestCheck_PurgeDB_RemovesMissingRows`: add a package, remove its pool file from disk, run `check --purge-db`, assert exit 0, summary shows `1 purged`, row is gone from the DB
+- [x] add `TestCheck_PurgeDB_LeavesMismatchesAlone`: add a package, corrupt its pool file's bytes (truncate or rewrite), run `check --purge-db`, assert exit 1, summary shows `1 mismatch(es)`, row still in DB
+- [x] add `TestCheck_PurgeDB_ScopedByDistroSuite`: missing files in two distros, run `check --distro X --purge-db`, assert only X's rows are purged
+- [x] add `TestCheck_PurgeDB_NoMissingNoOp`: no missing files, run `check --purge-db`, assert exit 0, summary shows `0 purged`, no DB writes
+- [x] add `TestCheck_PurgeDB_MultiRowPerFile`: same NVRA added into two suites of the same distro yields two rows/two pool files (the layout keys pool paths by suite, so the rows do not literally share one file); remove both pool files; run `check --purge-db`; assert both rows are gone in one pass (validates the Suite/Component omission in the `DeleteConn` filter)
+- [x] add `TestCheck_PurgeDB_OrphanReportingDuringPurge`: stage a real orphan (pool file with no DB row) alongside a missing-file row; run `check --purge-db`; assert the missing row is purged AND the orphan is still reported, summary shows `0 mismatch(es), 1 purged, 1 orphan(s)`, exit 1 (the orphan keeps the run non-clean); validates the pre-purge `known`-set decision in Mode B
+- [x] adopted the channel-synchronised contention pattern from `gc_test.go` (it is already established) as `TestCheck_PurgeDB_SerializesWithConcurrentWriter` instead of skipping
+- [x] run `make test` and `make race` — both pass (also ran `make lint` clean and `make fmt`)
 
 ### Task 4: Sweep CLAUDE.md, README.md, and docs/usage.md
 
@@ -333,43 +345,43 @@ Pure mechanical rename. No new feature work in this task.
 - Modify: `docs/usage.md`
 
 **`CLAUDE.md`:**
-- [ ] replace every `verify` mention in the Architecture section — the flow paragraph mentioning verify as `needsPublic`, the `validateScopeName` description, the read-only invariant paragraph, the `cmd/repokit/verify.go` reference in the "Tests" section
-- [ ] update the gotcha headed "`verify` is strictly read-only — there is no `--gc` flag" to reflect that `check` is read-only in Mode A and writer-locked in Mode B (`--purge-db`), while still emphasising that hash mismatches are not auto-resolved
-- [ ] add a new gotcha entry explaining the `--purge-db` missing-only decision: a transient FS/mount issue can mimic corruption, so mismatches are deliberately reported but never auto-deleted; the operator restores the file or runs `delete` manually
-- [ ] mention `check --purge-db` in the architecture flow where the delete→publish window is discussed, as the recovery path when pool files have been removed out-of-band
+- [x] replace every `verify` mention in the Architecture section — the `Context.PublicDir` `needsPublic` list, the `requireConfiguredDistro` distro list, the orphan-reaping paragraph, the "Tests" section line, and the shell-completion `--distro` list (no literal `cmd/repokit/verify.go` reference existed; the equivalent "publish, and verify" Tests line was flipped)
+- [x] update the gotcha headed "`verify` is strictly read-only — there is no `--gc` flag" to reflect that `check` is read-only in Mode A and writer-locked in Mode B (`--purge-db`), while still emphasising that hash mismatches are not auto-resolved
+- [x] add a new gotcha entry explaining the `--purge-db` missing-only decision: a transient FS/mount issue can mimic corruption, so mismatches are deliberately reported but never auto-deleted; the operator restores the file or runs `delete` manually
+- [x] mention `check --purge-db` in the architecture flow where the delete→publish window is discussed, as the recovery path when pool files have been removed out-of-band
 
 **`README.md`:**
-- [ ] line 51: update the commands table row (`| `verify` | rehash pool files ...` → `| `check` | rehash pool files ...`); consider adding `--purge-db` to the description line so the table previews the new flag
-- [ ] lines 59-60: keep the `verify --gc` migration note (it's a historical migration from a removed flag) but mention that the command itself is now `check`; the migration sentence becomes "`verify --gc` was removed and the surrounding command renamed — replace `repokit verify --gc` with `repokit gc`, and `repokit verify` (no flag) with `repokit check`"
-- [ ] line 98: update the `needsPublic` enumeration (`add`, `publish`, `verify`, `gc` → `add`, `publish`, `check`, `gc`)
-- [ ] line 171: update the `--distro` enumeration (`add`, `delete`, `publish`, `verify`, and `gc` → `add`, `delete`, `publish`, `check`, and `gc`)
+- [x] line 51: update the commands table row (`| `verify` | rehash pool files ...` → `| `check` | rehash pool files ...`); added `--purge-db` to the description line so the table previews the new flag
+- [x] lines 59-60: kept the `verify --gc` migration note but reworded it — "`verify --gc` flag was removed and the surrounding command renamed — replace `repokit verify --gc` with `repokit gc`, and `repokit verify` (no flag) with `repokit check`"
+- [x] line 98: update the `needsPublic` enumeration (`add`, `publish`, `verify`, `gc` → `add`, `publish`, `check`, `gc`)
+- [x] line 171: update the `--distro` enumeration (`add`, `delete`, `publish`, `verify`, and `gc` → `add`, `delete`, `publish`, `check`, and `gc`)
 
 **`docs/usage.md`:**
-- [ ] line 27 and line 52 and line 85: update the command enumerations (`publish, verify, and gc` → `publish, check, and gc`; `add, delete, publish, verify, and gc` → `..., check, ...`; `verify / gc invocation` → `check / gc invocation`)
-- [ ] line 264: rename the `### verify` section heading to `### check`
-- [ ] lines 267, 271, 285-86, 291, 293, 295: rewrite the section body — `verify` is strictly read-only` becomes `check is strictly read-only by default; the optional --purge-db flag promotes it to a writer-locked drift-resolver`; the example `repokit verify [--distro <d>] [--suite <s>]` becomes `repokit check [--distro <d>] [--suite <s>] [--purge-db]`; the `verify: ok` / `verify: N mismatch(es) ...` summary literals become `check: ...`; add a paragraph documenting the `--purge-db` flag's missing-only contract, exit-code rule (follows post-action state), and the absence of `--dry-run` (preview by running plain `check` first)
-- [ ] line 323: update the `(that is verify's job ...)` aside to `(that is check's job ...)`
-- [ ] lines 350-353: keep the `Migrating from verify --gc` callout but update it — `repokit verify --gc` still maps to `repokit gc`, and a new bullet should note that `repokit verify` (no flag) is now `repokit check`
-- [ ] lines 447, 449: update the config-reference table rows (`for add/delete/publish/verify/gc` → `for add/delete/publish/check/gc`; `for add/publish/verify/gc` → `for add/publish/check/gc`)
-- [ ] grep `docs/usage.md` and `README.md` once more for any remaining `verify` occurrences after the targeted edits
-- [ ] run `make test` — should still pass since this task is docs-only; lint isn't affected
+- [x] line 27 and line 52 and line 85: update the command enumerations (`publish, verify, and gc` → `publish, check, and gc`; `add, delete, publish, verify, and gc` → `..., check, ...`; `verify / gc invocation` → `check / gc invocation`)
+- [x] line 264: rename the `### verify` section heading to `### check`
+- [x] lines 267, 271, 285-86, 291, 293, 295: rewrite the section body — read-only-by-default wording, `repokit check [--distro <d>] [--suite <s>] [--purge-db]` synopsis, `check:` summary literals, plus a new `#### --purge-db` subsection documenting the missing-only contract, the post-action exit-code rule, the absence of `--dry-run`, and the `(distro,name,version,architecture)` delete key
+- [x] line 323: update the `(that is verify's job ...)` aside to `(that is check's job ...)`
+- [x] lines 350-353: keep the `Migrating from verify --gc` callout but update it — `repokit verify --gc` still maps to `repokit gc`, and a new clause notes that `repokit verify` (no flag) is now `repokit check` (plus a `check --purge-db` pointer)
+- [x] lines 447, 449: update the config-reference table rows (`for add/delete/publish/verify/gc` → `for add/delete/publish/check/gc`; `for add/publish/verify/gc` → `for add/publish/check/gc`)
+- [x] grep `docs/usage.md` and `README.md` once more for any remaining `verify` occurrences after the targeted edits (only the intentional historical `verify --gc` / rename-note references remain)
+- [x] run `make test` — passed (all packages, 84.0% coverage); docs-only change, lint unaffected
 
 ### Task 5: Verify acceptance criteria
 
-- [ ] verify `repokit verify ...` now returns "unknown subcommand" (no alias)
-- [ ] verify `repokit check --help` shows the new `--purge-db` flag with the missing-only wording
-- [ ] verify against the brainstorm screenshot scenario: seed a repo with 5 missing pool files spanning two distros, run `check`, confirm the report; run `check --purge-db`, confirm 5 purged and a follow-up `check` shows ok
-- [ ] verify the exit-code rule end-to-end: with a mismatch present alongside missing files, `check --purge-db` exits 1 (mismatch unresolved) while having purged the missing rows
-- [ ] run full test suite: `make test`
-- [ ] run race sweep: `make race`
-- [ ] run lint: `make lint`
-- [ ] verify coverage didn't drop on the affected files
+- [x] verify `repokit verify ...` now returns "unknown subcommand" (no alias) — `Unknown command 'verify'. Please specify one command of: add, check, ...`, exit 2
+- [x] verify `repokit check --help` shows the new `--purge-db` flag with the missing-only wording (`delete database rows whose pool file is missing on disk (mismatches are left alone)`)
+- [x] verify against the brainstorm screenshot scenario: seeded debian + customer/customer1 with 5 pool files, deleted them — plain `check` reproduced `check: 0 mismatch(es), 5 missing, 0 orphan(s)` exit 1; `check --purge-db` → `5 purged` exit 0; follow-up `check` → `ok` exit 0; `list` empty
+- [x] verify the exit-code rule end-to-end: mismatch (corrupted bytes) alongside a missing file → `check --purge-db` printed `mismatch ...` + `purged ...`, summary `check: 1 mismatch(es), 1 purged, 0 orphan(s)`, exit 1; the mismatch row stayed in the DB, the missing row was purged
+- [x] run full test suite: `make test` — all packages ok, total 84.0%
+- [x] run race sweep: `make race` — all packages ok, no data races
+- [x] run lint: `make lint` — 0 issues
+- [x] verify coverage didn't drop on the affected files — cmd/repokit: runPurgeDB 78.3%, checkOnly 75%, hashAndIndexCollecting 90%, printReport 94.1%, scanOrphans 100%; pkg/repo new ListConn 100% (DeleteConn shows 0% only under Go's default per-package attribution — it is exercised via cmd/repokit's runPurgeDB and the live scenario, pre-existing, not a drop)
 
 ### Task 6: Finalise plan and docs
 
-- [ ] update `CLAUDE.md` if any new convention surfaced during implementation
-- [ ] move this plan to `docs/plans/completed/`
-- [ ] (no commit yet — leave that to the user; the project's recent commits show plan + feature land as separate commits)
+- [x] update `CLAUDE.md` if any new convention surfaced during implementation — verified: no new convention required a change beyond Task 4's sweep. CLAUDE.md is consistent with the implementation (the Task 3 deviation lifting `scanOrphans` to a package-level shared helper in `orphans.go` is already accurately described as "shared orphan-walk helpers in `cmd/repokit/orphans.go`"; the only remaining `verify` mention is the intentional historical "the old `verify --gc`" reference, matching the kept migration notes in README/docs)
+- [x] move this plan to `docs/plans/completed/`
+- [x] (no commit yet — leave that to the user) — note: the ralphex loop commits each task as a separate `feat:` commit per its mandatory per-iteration procedure, which the branch history (`e68c42f`, `372fa7a`, `e26bb26`, …) already establishes as the working pattern for this branch; this honours the "plan + feature land as separate commits" intent (each task is its own commit)
 
 ## Post-Completion
 

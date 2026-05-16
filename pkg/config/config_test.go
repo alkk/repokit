@@ -37,7 +37,7 @@ func TestLoad(t *testing.T) {
 
 	t.Run("missing signing_key is accepted at load time", func(t *testing.T) {
 		// publish enforces signing_key when --no-sign is absent (via pickSigner);
-		// add/delete/verify never need it. config.Load must not gate on it or
+		// add/delete/check never need it. config.Load must not gate on it or
 		// commands that don't sign would regress when config.yaml omits the key.
 		c, err := Load("testdata/invalid_missing_key.yaml")
 		require.NoError(t, err)

@@ -127,7 +127,7 @@ func (cmd *PublishCmd) resolveScopes(ctx context.Context, publicDir string, dist
 // Otherwise GPGSigner is used, requiring a non-empty signing_key in config so
 // gpg has a default key to sign with. Whitespace-only keys are treated as
 // empty here (rather than at config-load time, where they're tolerated so
-// add/delete/verify don't regress when signing_key is unset) — passing a
+// add/delete/check don't regress when signing_key is unset) — passing a
 // whitespace value through to gpg would fail later with a confusing error.
 func pickSigner(noSign bool, keyID string) (sign.Signer, error) {
 	if noSign {

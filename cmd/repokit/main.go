@@ -67,7 +67,7 @@ const (
 	cmdList       = "list"
 	cmdSearch     = "search"
 	cmdPublish    = "publish"
-	cmdVerify     = "verify"
+	cmdCheck      = "check"
 	cmdGc         = "gc"
 	cmdInfo       = "info"
 	cmdCompletion = "completion"
@@ -103,7 +103,7 @@ var defaultStateDir = func() (string, error) {
 // ".old" — those suffixes are reserved for publish's staging siblings, and a
 // real suite using them would be wiped by cleanStaging of a sibling publish.
 // An empty value is permitted here so callers that treat the field as an
-// optional filter (verify, publish) can pass it through; commands where the
+// optional filter (check, publish) can pass it through; commands where the
 // field must be set enforce non-emptiness in their own validate.
 func validateScopeName(field, val string) error {
 	if val == "" {
@@ -149,7 +149,7 @@ func requireScopeName(field, val string) error {
 // `--distro <value>` in the same style as validateScopeName so operators get a
 // uniform CLI-shaped message regardless of which validator fired. An empty
 // value is permitted so callers that treat --distro as an optional filter
-// (verify, publish) can pass it through; commands where the field is required
+// (check, publish) can pass it through; commands where the field is required
 // gate emptiness via requireDistroScope.
 func validateDistroScope(val string) error {
 	if val == "" {
@@ -193,7 +193,7 @@ func requireConfiguredDistro(cfg *config.Config, distro string) error {
 }
 
 // requireConfiguredDistros enforces that config.distros is non-empty. Used by
-// unscoped publish/verify so a legacy or misconfigured repo without a
+// unscoped publish/check so a legacy or misconfigured repo without a
 // distros: block fails with a clear error rather than silently exiting 0 —
 // the scoped --distro path is already covered by requireConfiguredDistro.
 func requireConfiguredDistros(cfg *config.Config) error {
@@ -206,7 +206,7 @@ func requireConfiguredDistros(cfg *config.Config) error {
 // Options holds the global flags and all subcommand groups.
 type Options struct {
 	Repo    string `long:"repo" short:"r" env:"REPOKIT_ROOT" description:"path to repository state dir (defaults to $REPOKIT_ROOT or ~/.repokit/)"`
-	Public  string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/publish/verify/gc; falls back to public_dir in config.yaml"`
+	Public  string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/publish/check/gc; falls back to public_dir in config.yaml"`
 	Quiet   bool   `long:"quiet" short:"q" description:"suppress non-error output"`
 	Version bool   `long:"version" short:"v" description:"print version and exit"`
 
@@ -216,7 +216,7 @@ type Options struct {
 	List       ListCmd       `command:"list" alias:"ls" description:"list packages"`
 	Search     SearchCmd     `command:"search" description:"search packages by name or description"`
 	Publish    PublishCmd    `command:"publish" description:"rebuild and sign dists/ for one or more suites"`
-	Verify     VerifyCmd     `command:"verify" description:"verify pool file hashes against the database"`
+	Check      CheckCmd      `command:"check" description:"check pool file hashes against the database"`
 	Gc         GcCmd         `command:"gc" description:"remove orphan pool files (files with no database row)"`
 	Info       InfoCmd       `command:"info" description:"inspect a .deb file without modifying the repo"`
 	Completion CompletionCmd `command:"completion" description:"emit a shell completion script (bash|zsh|fish); install with e.g. 'source <(repokit completion bash)'"`
@@ -335,8 +335,8 @@ func dispatch(cmd string, opts *Options, ctx *Context, stderr io.Writer) int {
 		return opts.Search.Execute(ctx)
 	case cmdPublish:
 		return opts.Publish.Execute(ctx)
-	case cmdVerify:
-		return opts.Verify.Execute(ctx)
+	case cmdCheck:
+		return opts.Check.Execute(ctx)
 	case cmdGc:
 		return opts.Gc.Execute(ctx)
 	case cmdInfo:
@@ -367,7 +367,7 @@ type Context struct {
 // resolvable public_dir would block deletes for no functional reason.
 func needsPublic(cmd string) bool {
 	switch cmd {
-	case cmdAdd, cmdPublish, cmdVerify, cmdGc:
+	case cmdAdd, cmdPublish, cmdCheck, cmdGc:
 		return true
 	default:
 		return false
@@ -378,7 +378,7 @@ func needsPublic(cmd string) bool {
 // is the bootstrap that creates the file, and info inspects a .deb without
 // touching state — both run without a config. Every other command loads it
 // unconditionally so a malformed config surfaces at startup instead of
-// silently passing list/search/verify and only blowing up on publish.
+// silently passing list/search/check and only blowing up on publish.
 func needsConfig(cmd string) bool {
 	switch cmd {
 	case cmdInit, cmdInfo, cmdCompletion:

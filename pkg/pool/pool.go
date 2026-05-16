@@ -442,7 +442,7 @@ func stashExisting(dest string, overwrite bool) (string, error) {
 // a best-effort cleanup — the original error is the one returned to the
 // caller, so silently swallowing a failed restore would mislead them. We
 // log nothing because pool callers don't have a logger; instead the next
-// publish would surface the missing pool file via verify.
+// publish would surface the missing pool file via check.
 func restoreBackup(backup, dest string) {
 	if backup == "" {
 		return

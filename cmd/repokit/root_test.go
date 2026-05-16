@@ -371,7 +371,7 @@ func TestRequireConfiguredDistro(t *testing.T) {
 
 // TestDistroPathTraversalRejected guards every command that lets --distro
 // flow into a filesystem path. If a future change forgot the validateScopeName
-// gate, a malicious value like "../etc" would let publish or verify operate
+// gate, a malicious value like "../etc" would let publish or check operate
 // on a directory outside the repo root. The test asserts non-zero exit and
 // that no per-distro tree was created at the traversal target.
 func TestDistroPathTraversalRejected(t *testing.T) {
@@ -405,9 +405,9 @@ func TestDistroPathTraversalRejected(t *testing.T) {
 			},
 		},
 		{
-			name: "verify",
+			name: "check",
 			args: func(d string) []string {
-				return []string{"verify", "--distro", d}
+				return []string{"check", "--distro", d}
 			},
 		},
 	}
@@ -461,7 +461,7 @@ func TestNeedsPublic(t *testing.T) {
 		"add":        true,
 		"delete":     false,
 		"publish":    true,
-		"verify":     true,
+		"check":      true,
 		"init":       false,
 		"info":       false,
 		"list":       false,
@@ -666,7 +666,7 @@ func TestRunPopulatesPublicDirForNeedyCommand(t *testing.T) {
 	initRepoForTest(t, root)
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "--public", public, "verify"},
+	code := run([]string{"--repo", root, "--public", public, "check"},
 		&stdout, &stderr, "test-rev")
 	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
@@ -678,7 +678,7 @@ func TestRunUsesEnvPublic(t *testing.T) {
 	t.Setenv(envPublic, public)
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	code := run([]string{"--repo", root, "check"}, &stdout, &stderr, "test-rev")
 	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
@@ -691,7 +691,7 @@ func TestRunReadsPublicDirFromConfig(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	code := run([]string{"--repo", root, "check"}, &stdout, &stderr, "test-rev")
 	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
@@ -701,16 +701,16 @@ func TestRunErrorsWhenPublicMissingForNeedyCommand(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	code := run([]string{"--repo", root, "check"}, &stdout, &stderr, "test-rev")
 	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "public_dir is not set")
 }
 
-// TestRunVerifyToleratesMissingSigningKey guards against the regression where
+// TestRunCheckToleratesMissingSigningKey guards against the regression where
 // loadConfig (called for every needsPublic command) bubbled up an
-// ErrMissingSigningKey from config.Load — breaking add/delete/verify whenever
+// ErrMissingSigningKey from config.Load — breaking add/delete/check whenever
 // signing_key was blank, even though those commands never sign.
-func TestRunVerifyToleratesMissingSigningKey(t *testing.T) {
+func TestRunCheckToleratesMissingSigningKey(t *testing.T) {
 	root := t.TempDir()
 	public := t.TempDir()
 	initRepoForTest(t, root)
@@ -719,7 +719,7 @@ func TestRunVerifyToleratesMissingSigningKey(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	code := run([]string{"--repo", root, "check"}, &stdout, &stderr, "test-rev")
 	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
@@ -739,12 +739,12 @@ func TestRunSkipsPublicResolutionForListAndInit(t *testing.T) {
 	assert.Equal(t, exitOK, code, "init should not require --public; stderr=%s", stderr.String())
 }
 
-// TestRunVerifyWithReplaceMeFallsBackToConfig guards the corner case where
+// TestRunCheckWithReplaceMeFallsBackToConfig guards the corner case where
 // --public / $REPOKIT_PUBLIC is set to the literal placeholder value. The
 // flag-load skip optimization must still load config.yaml in that case so
 // resolvePublicDir's REPLACE_ME-as-unset rule can fall back to public_dir
 // from config.
-func TestRunVerifyWithReplaceMeFallsBackToConfig(t *testing.T) {
+func TestRunCheckWithReplaceMeFallsBackToConfig(t *testing.T) {
 	root := t.TempDir()
 	public := t.TempDir()
 	initRepoForTest(t, root)
@@ -753,7 +753,7 @@ func TestRunVerifyWithReplaceMeFallsBackToConfig(t *testing.T) {
 	t.Setenv(envPublic, placeholderValue)
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "verify"}, &stdout, &stderr, "test-rev")
+	code := run([]string{"--repo", root, "check"}, &stdout, &stderr, "test-rev")
 	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
 }
 
@@ -771,7 +771,7 @@ func TestRunMalformedConfigBlocksAllStateCommands(t *testing.T) {
 	t.Setenv(envPublic, "")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--repo", root, "--public", public, "verify"},
+	code := run([]string{"--repo", root, "--public", public, "check"},
 		&stdout, &stderr, "test-rev")
 	assert.Equal(t, exitError, code)
 	assert.Contains(t, stderr.String(), "loading config")

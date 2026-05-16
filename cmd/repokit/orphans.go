@@ -85,6 +85,19 @@ func scanPoolForOrphansAcrossDistros(publicDir string, distros []string, known m
 	return orphans, nil
 }
 
+// scanOrphans dispatches the orphan walk for both the scoped (distro set) and
+// unscoped (distro == "") paths. The unscoped path iterates the configured
+// distros from config.yaml — repokit never walks distros the operator has not
+// declared, so unrelated top-level trees under the public dir are left
+// untouched. Shared by gc and check --purge-db so the dispatch lives in one
+// place.
+func scanOrphans(publicDir, distro, suite string, distros []string, known map[string]struct{}) ([]string, error) {
+	if distro != "" {
+		return scanPoolForOrphans(publicDir, distro, suite, known)
+	}
+	return scanPoolForOrphansAcrossDistros(publicDir, distros, known)
+}
+
 // scopePoolDir returns the disk-relative subtree to walk for orphan detection
 // inside a single distro. The unscoped (no distro) case has no single root —
 // callers iterate over distros and call this per-distro.
