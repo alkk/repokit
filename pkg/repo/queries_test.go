@@ -341,6 +341,53 @@ func TestExistsByFilenameConn(t *testing.T) {
 	}
 }
 
+func TestPoolRefs(t *testing.T) {
+	r := openTempRepo(t)
+	ctx := context.Background()
+
+	a := samplePackage("debian", "bookworm", "main", "amd64", "alpha", "1.0")
+	b := samplePackage("debian", "bookworm", "main", "amd64", "beta", "1.0")
+	c := samplePackage("debian", "bullseye", "main", "amd64", "alpha", "1.0")
+	d := samplePackage("ubuntu", "noble", "main", "amd64", "gamma", "1.0")
+	insertAll(t, r, a, b, c, d)
+
+	t.Run("unfiltered returns every distinct pool ref", func(t *testing.T) {
+		refs, err := r.PoolRefs(ctx, Filter{})
+		require.NoError(t, err)
+		assert.Equal(t, []PoolRef{
+			{Distro: "debian", Filename: a.Filename},
+			{Distro: "debian", Filename: b.Filename},
+			{Distro: "debian", Filename: c.Filename},
+			{Distro: "ubuntu", Filename: d.Filename},
+		}, refs)
+	})
+
+	t.Run("distro filter narrows the set", func(t *testing.T) {
+		refs, err := r.PoolRefs(ctx, Filter{Distro: "ubuntu"})
+		require.NoError(t, err)
+		assert.Equal(t, []PoolRef{{Distro: "ubuntu", Filename: d.Filename}}, refs)
+	})
+
+	t.Run("distro+suite filter narrows further", func(t *testing.T) {
+		refs, err := r.PoolRefs(ctx, Filter{Distro: "debian", Suite: "bullseye"})
+		require.NoError(t, err)
+		assert.Equal(t, []PoolRef{{Distro: "debian", Filename: c.Filename}}, refs)
+	})
+
+	t.Run("PoolRefsConn reads through the writer lock", func(t *testing.T) {
+		var refs []PoolRef
+		require.NoError(t, r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
+			var qerr error
+			refs, qerr = r.PoolRefsConn(ctx, conn, Filter{Distro: "debian", Suite: "bookworm"})
+			return qerr
+		}))
+		assert.Equal(t, []PoolRef{
+			{Distro: "debian", Filename: a.Filename},
+			{Distro: "debian", Filename: b.Filename},
+		}, refs)
+	})
+}
+
 func TestDeleteRollsBackOnError(t *testing.T) {
 	r := openTempRepo(t)
 	ctx := context.Background()

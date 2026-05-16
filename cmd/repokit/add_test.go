@@ -224,6 +224,79 @@ func TestAddDuplicateWithoutReplace(t *testing.T) {
 		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")))
 }
 
+// TestAddReAddsDeletedPackageReusesOrphan pins the delete -> re-add path:
+// delete is DB-only, so the prior pool file survives as an orphan once its
+// row is gone. Re-adding the identical .deb without --replace must succeed by
+// re-adopting the orphan in place rather than failing with
+// "pool: ... already exists".
+func TestAddReAddsDeletedPackageReusesOrphan(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+	addOnce(t, tmpState, tmpPublic, deb)
+
+	poolFile := filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
+	require.Equal(t, 1, rowCount(t, tmpState))
+	require.FileExists(t, poolFile)
+	wantSHA := fileSHA256(t, poolFile)
+
+	code, _, stderr := runDelete(t, tmpState, tmpPublic,
+		"--distro", "debian", "--suite", "bookworm",
+		"--name", "hello-gz", "--version", "1.0",
+	)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+	require.Equal(t, 0, rowCount(t, tmpState))
+	require.FileExists(t, poolFile, "delete is DB-only; the pool file is now an orphan")
+
+	var stdout, errBuf bytes.Buffer
+	code = run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm",
+		deb,
+	}, &stdout, &errBuf, "test-rev")
+	require.Equal(t, exitOK, code, "re-add over identical orphan must succeed: %s", errBuf.String())
+	assert.Contains(t, stdout.String(), "staged 1 packages")
+
+	assert.Equal(t, 1, rowCount(t, tmpState), "re-add must restore the DB row")
+	assert.FileExists(t, poolFile, "the re-adopted orphan must remain on disk")
+	assert.Equal(t, wantSHA, fileSHA256(t, poolFile),
+		"re-adopted pool file must keep its original bytes")
+	assert.Len(t, listPoolFiles(t, tmpPublic), 1, "no duplicate pool file should be created")
+}
+
+// TestAddRejectsDifferentBytesAtExistingPoolPath guards the clobber
+// protection the orphan re-adoption must not weaken: a pool file present at
+// the target path with bytes that differ from the incoming .deb (no DB row —
+// e.g. a stale orphan from a different build) must still hard-error on a
+// non-replace add so --replace stays the only way to overwrite it.
+func TestAddRejectsDifferentBytesAtExistingPoolPath(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
+
+	poolFile := filepath.Join(tmpPublic, filepath.FromSlash(
+		"debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(poolFile), 0o755))
+	require.NoError(t, os.WriteFile(poolFile, []byte("stale orphan bytes"), 0o644))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "add",
+		"--distro", "debian", "--suite", "bookworm",
+		deb,
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitError, code)
+	assert.Contains(t, stderr.String(), "already exists")
+	assert.Equal(t, 0, rowCount(t, tmpState), "the failed add must roll back its row")
+	got, err := os.ReadFile(poolFile)
+	require.NoError(t, err)
+	assert.Equal(t, "stale orphan bytes", string(got),
+		"the differing pool file must be left untouched")
+}
+
 func TestAddReplaceOverwrites(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()

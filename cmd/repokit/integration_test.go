@@ -227,14 +227,106 @@ func TestIntegration_MultiSuiteMultiArchMultiComponent(t *testing.T) {
 	assert.True(t, hasStanza(bsStanzas, pkgName, pkgVer, "amd64"))
 	assert.True(t, hasStanza(bsStanzas, pkgName, pkgVer, "all"))
 
-	// pool file for the deleted row is gone; siblings remain.
+	// delete is DB-only: the deleted row's pool file stays on disk as an
+	// orphan (reaped later by `repokit gc`); siblings remain too.
 	deletedPool := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
-	_, err := os.Stat(deletedPool)
-	require.ErrorIsf(t, err, fs.ErrNotExist, "deleted pool file should be gone (got err=%v)", err)
+	assert.FileExists(t, deletedPool,
+		"deleted package's pool file survives as an orphan until gc")
 	survivor := filepath.Join(tmpPublic, "debian", "pool", "bullseye", "main",
 		"a", "alpha", "alpha_1.0_amd64.deb")
 	assert.FileExists(t, survivor)
+
+	// gc is the reaper: scoped to debian it removes the now-orphan pool file
+	// the scoped delete left behind, while files still referenced by a DB row
+	// (the bullseye survivor) are left untouched.
+	runCmd("gc", "--distro", "debian")
+	_, err := os.Stat(deletedPool)
+	require.ErrorIsf(t, err, fs.ErrNotExist,
+		"gc must reap the orphan pool file the DB-only delete left behind")
+	assert.FileExists(t, survivor,
+		"gc must not remove pool files still referenced by a DB row")
+
+	assertStateDirIsPrivate(t, tmpState)
+}
+
+// TestIntegration_DeleteDefersPoolRemovalUntilGc exercises the full new
+// contract end-to-end on a single suite that holds two packages:
+//
+//	add alpha+beta → publish → delete alpha → assert alpha's pool file is
+//	still on disk → publish → assert the rebuilt Packages no longer lists
+//	alpha (but still lists beta) and alpha's pool file STILL survives the
+//	republish → gc → assert alpha's pool file is finally gone while beta's
+//	(still DB-referenced) pool file is untouched.
+//
+// This is the load-bearing scenario the whole plan was designed around: the
+// window between delete and the next publish leaves the on-disk repo
+// internally consistent (indexes still point at files that still exist), and
+// orphan reclamation is an explicit, separate gc step — never publish.
+func TestIntegration_DeleteDefersPoolRemovalUntilGc(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	debDir := t.TempDir()
+
+	runCmd := func(name string, args ...string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		full := append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...)
+		code := run(full, &stdout, &stderr, "test-rev")
+		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
+	}
+
+	runCmd("init")
+	appendTestDistros(t, tmpState, "debian")
+
+	alphaDeb := buildTestDeb(t, debDir, "alpha", "1.0", "amd64")
+	betaDeb := buildTestDeb(t, debDir, "beta", "1.0", "amd64")
+
+	runCmd("add", "--distro", "debian", "--suite", "bookworm", alphaDeb, betaDeb)
+	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
+
+	alphaPool := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main",
+		"a", "alpha", "alpha_1.0_amd64.deb")
+	betaPool := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main",
+		"b", "beta", "beta_1.0_amd64.deb")
+	pkgPath := filepath.Join(tmpPublic, "debian", "dists", "bookworm",
+		"main", "binary-amd64", "Packages")
+
+	assert.FileExists(t, alphaPool)
+	assert.FileExists(t, betaPool)
+	stanzas := readStanzas(t, pkgPath)
+	require.Len(t, stanzas, 2)
+	assert.True(t, hasStanza(stanzas, "alpha", "1.0", "amd64"))
+	assert.True(t, hasStanza(stanzas, "beta", "1.0", "amd64"))
+
+	// DB-only delete: the row is retired but the pool bytes stay put.
+	runCmd("delete",
+		"--distro", "debian", "--suite", "bookworm", "--component", "main",
+		"--arch", "amd64", "--name", "alpha", "--version", "1.0")
+	assert.FileExists(t, alphaPool,
+		"delete is DB-only: alpha's pool file must survive as an orphan")
+	assert.FileExists(t, betaPool)
+
+	// Republish: indexes drop alpha, but publish never reaps orphans —
+	// alpha's pool file is still on disk, just no longer indexed.
+	runCmd("publish", "--distro", "debian", "--suite", "bookworm", "--no-sign")
+	stanzasAfter := readStanzas(t, pkgPath)
+	require.Len(t, stanzasAfter, 1, "only beta should remain indexed")
+	assert.False(t, hasStanza(stanzasAfter, "alpha", "1.0", "amd64"),
+		"rebuilt Packages must not list the deleted package")
+	assert.True(t, hasStanza(stanzasAfter, "beta", "1.0", "amd64"),
+		"the surviving package must stay indexed")
+	assert.FileExists(t, alphaPool,
+		"publish must not remove orphan pool files — that is gc's job")
+
+	// gc reaps the orphan and prunes its now-empty shard, while beta's
+	// still-referenced pool file is left alone.
+	runCmd("gc", "--distro", "debian")
+	_, err := os.Stat(alphaPool)
+	require.ErrorIsf(t, err, fs.ErrNotExist,
+		"gc must remove the orphan pool file the DB-only delete left behind")
+	assert.FileExists(t, betaPool,
+		"gc must not touch pool files still referenced by a DB row")
 
 	assertStateDirIsPrivate(t, tmpState)
 }

@@ -125,7 +125,7 @@ func RollbackReplace(root, relPath, backup string) {
 
 // Delete removes the named pool file. A missing file is not an error.
 // Refuses paths that resolve outside root so a corrupted DB row containing
-// `..` segments cannot trick a caller (e.g. verify --gc) into deleting
+// `..` segments cannot trick a caller (e.g. gc) into deleting
 // arbitrary files the process has access to.
 func Delete(root, relPath string) error {
 	dest, err := SafeJoin(root, relPath)

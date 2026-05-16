@@ -68,6 +68,7 @@ const (
 	cmdSearch     = "search"
 	cmdPublish    = "publish"
 	cmdVerify     = "verify"
+	cmdGc         = "gc"
 	cmdInfo       = "info"
 	cmdCompletion = "completion"
 )
@@ -205,7 +206,7 @@ func requireConfiguredDistros(cfg *config.Config) error {
 // Options holds the global flags and all subcommand groups.
 type Options struct {
 	Repo    string `long:"repo" short:"r" env:"REPOKIT_ROOT" description:"path to repository state dir (defaults to $REPOKIT_ROOT or ~/.repokit/)"`
-	Public  string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/delete/publish/verify; falls back to public_dir in config.yaml"`
+	Public  string `long:"public" short:"p" env:"REPOKIT_PUBLIC" description:"path to public-facing tree (pool/ + dists/) — required for add/publish/verify/gc; falls back to public_dir in config.yaml"`
 	Quiet   bool   `long:"quiet" short:"q" description:"suppress non-error output"`
 	Version bool   `long:"version" short:"v" description:"print version and exit"`
 
@@ -216,6 +217,7 @@ type Options struct {
 	Search     SearchCmd     `command:"search" description:"search packages by name or description"`
 	Publish    PublishCmd    `command:"publish" description:"rebuild and sign dists/ for one or more suites"`
 	Verify     VerifyCmd     `command:"verify" description:"verify pool file hashes against the database"`
+	Gc         GcCmd         `command:"gc" description:"remove orphan pool files (files with no database row)"`
 	Info       InfoCmd       `command:"info" description:"inspect a .deb file without modifying the repo"`
 	Completion CompletionCmd `command:"completion" description:"emit a shell completion script (bash|zsh|fish); install with e.g. 'source <(repokit completion bash)'"`
 }
@@ -335,6 +337,8 @@ func dispatch(cmd string, opts *Options, ctx *Context, stderr io.Writer) int {
 		return opts.Publish.Execute(ctx)
 	case cmdVerify:
 		return opts.Verify.Execute(ctx)
+	case cmdGc:
+		return opts.Gc.Execute(ctx)
 	case cmdInfo:
 		return opts.Info.Execute(ctx)
 	case cmdCompletion:
@@ -357,11 +361,13 @@ type Context struct {
 
 // needsPublic reports whether cmd's handler reads or writes the public tree
 // (pool/ + dists/). Commands that only touch the state dir (init, info, list,
-// search) skip public-dir resolution so an unconfigured public_dir does not
-// block read-only operations.
+// search, delete) skip public-dir resolution so an unconfigured public_dir
+// does not block them. delete is DB-only — it removes rows but never reads or
+// writes pool/dists (the orphans it leaves are reaped by gc), so requiring a
+// resolvable public_dir would block deletes for no functional reason.
 func needsPublic(cmd string) bool {
 	switch cmd {
-	case cmdAdd, cmdDelete, cmdPublish, cmdVerify:
+	case cmdAdd, cmdPublish, cmdVerify, cmdGc:
 		return true
 	default:
 		return false

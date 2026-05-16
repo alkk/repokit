@@ -28,7 +28,7 @@ automatically.
 
 ## Architecture
 
-Subcommand dispatch is centralized in `cmd/repokit/root.go` via a single
+Subcommand dispatch is centralized in `cmd/repokit/main.go` via a single
 `jessevdk/go-flags` parser. Each subcommand is a `*Cmd` struct on `Options`
 with its flags as struct tags; `run()` resolves the state dir + public dir,
 builds a shared `Context`, and dispatches by `parser.Active.Name`. Adding a
@@ -40,16 +40,18 @@ subcommand means adding a field to `Options`, a case in the `switch`, and a
 - `Context.Root` — the **state dir**: holds `repo.db` and `config.yaml`. Set
   for every subcommand.
 - `Context.PublicDir` — the **public dir**: holds `<distro>/pool/` and
-  `<distro>/dists/`. Set only for `add`, `delete`, `publish`, `verify`
-  (`needsPublic` in `root.go`); empty for `init`, `info`, `list`, `search`.
+  `<distro>/dists/`. Set only for `add`, `publish`, `verify`, `gc`
+  (`needsPublic` in `main.go`); empty for `init`, `info`, `list`, `search`,
+  `delete` (`delete` is DB-only — it never reads or writes pool/dists, so it
+  does not resolve the public dir and an unset `public_dir` cannot block it).
 - `Context.Config` — parsed `config.yaml` (or an empty `*config.Config` when
   the file is missing). Loaded and validated once in `run()` for every command
   except `init` (creates the file) and `info` (never reads state) — see
   `needsConfig`. Subcommand handlers should read `c.Config` instead of
   re-calling `loadConfig(c.Root)`. `Config.Distros` is the authoritative list
-  of managed distros; `add`, `delete`, `publish`, and `verify` reject
+  of managed distros; `add`, `delete`, `publish`, `verify`, and `gc` reject
   `--distro` values not in this list via `requireConfiguredDistro` in
-  `root.go`. Distro names may be plain (`debian`) or one-level namespaced
+  `main.go`. Distro names may be plain (`debian`) or one-level namespaced
   (`customer/acme`, producing nested `<publicDir>/customer/acme/{pool,dists}/`);
   a plain-prefix conflict like `[customer, customer/acme]` is rejected at
   config load.
@@ -61,7 +63,7 @@ Flow of a typical write command (`add`, `delete`, `publish`):
    into `dists/`/`pool/` and against Release-header injection; also reserves
    `.new`/`.old` suite suffixes for publish staging). `--distro` is the
    exception: it goes through `validateDistroScope` / `requireDistroScope`
-   (in `root.go`), which delegate to `config.ValidateDistroName` so the
+   (in `main.go`), which delegate to `config.ValidateDistroName` so the
    one-level namespaced form (`customer/acme`) is accepted while the other
    scope fields keep `validateScopeName` (which still rejects `/`).
    `publish`'s `dbScopes` discovery path must use `validateDistroScope` too —
@@ -70,20 +72,33 @@ Flow of a typical write command (`add`, `delete`, `publish`):
    Go), runs any pending migrations from `pkg/repo/migrate.go`, and exposes
    typed queries in `pkg/repo/queries.go`. All multi-step writes happen
    inside a single transaction.
-3. `pkg/deb` parses `.deb` control metadata; `pkg/pool` writes pool files
-   under `Context.PublicDir` (with `pool_unix.go` / `pool_windows.go` split
-   for atomic rename semantics).
+3. `pkg/deb` parses `.deb` control metadata; on `add`, `pkg/pool` writes
+   pool files under `Context.PublicDir` (with `pool_unix.go` /
+   `pool_windows.go` split for atomic rename semantics). `delete` is
+   **DB-only** — it removes `packages` rows and never unlinks pool files;
+   the now-unreferenced files become orphans on disk.
 4. `publish` rebuilds `<publicDir>/<distro>/dists/<suite>.new/` via
    `pkg/index` (`packages.go` for `Packages{,.gz,.xz}`, `release.go` for
    `Release` / `InRelease` / `Release.gpg`), signs through `pkg/sign`
    (gpg-agent; never prompts), then atomically swaps `.new` → live → `.old`
    and cleans up. The `<suite>.new` staging dir is also cleaned on failure.
 
+Orphan reaping is split out of this flow: `delete` deliberately leaves pool
+files on disk so the published indexes still resolve until the next
+`publish`, keeping the on-disk repo internally consistent in the
+delete→publish window (no apt `404`s on retired `.deb`s). The orphans are
+reclaimed only by an explicit, operator-driven `repokit gc`
+(`cmd/repokit/gc.go`) — never auto-pruned by `publish`. `gc` reuses the
+shared orphan-walk helpers in `cmd/repokit/orphans.go` and serializes
+against a concurrent `add` with the same writer lock the old `verify --gc`
+held. `verify` is now strictly read-only / reporting and has no `--gc`
+flag.
+
 State-dir resolution: `--repo` > `$REPOKIT_ROOT` > `~/.repokit/` (default).
 The cwd is **not** consulted. Every command except `init` and `info` requires
 `repo.db` at the resolved state dir.
 
-Public-dir resolution (`resolvePublicDir` in `root.go`): `--public` /
+Public-dir resolution (`resolvePublicDir` in `main.go`): `--public` /
 `$REPOKIT_PUBLIC` (merged by go-flags into `opts.Public`) > `public_dir` in
 `config.yaml` (loaded once via `loadConfig` and threaded through
 `Context.Config`). The resolver rejects empty / `REPLACE_ME`, relative paths,
@@ -134,10 +149,25 @@ completion testable through `run`. The `completion` subcommand
   precedence rule that `--public` wins over the env var.
 - The default state dir is `~/.repokit/` for **every** subcommand including
   `init`. Tests must override `defaultStateDir` (package-level var in
-  `root.go`) rather than poke `$HOME`.
+  `main.go`) rather than poke `$HOME`.
 - Managed distros are explicit in `config.yaml`. The public dir may contain
   unrelated top-level directories — repokit never walks them. Adding a new
   distro requires a config edit before `add` will accept it.
+- `delete` is DB-only: it removes rows but never unlinks pool files, so
+  orphans accumulate on disk and only `repokit gc` reclaims them. This is
+  intentional — it keeps the published indexes resolvable in the
+  delete→publish window (no apt `404`s). Don't "fix" `delete` to unlink
+  pool files; that reintroduces the inconsistency this split was designed
+  to remove. Orphan cleanup is an explicit operator responsibility, never
+  auto-pruned by `publish`.
+- `verify` is strictly read-only — there is no `--gc` flag (removed pre-1.0
+  with no deprecation alias; orphan removal lives only under `gc`).
+  `verify` reports orphans and exits non-zero so they stay visible; running
+  `repokit gc` is what resolves them. `gc` and the old `verify --gc` share
+  the orphan-walk helpers in `cmd/repokit/orphans.go` and the same
+  writer-lock-spanning-the-scan invariant: an in-flight `add` writes pool
+  bytes before its row commits, so the lock must be held across the walk or
+  a concurrent `add`'s file is misclassified as an orphan and deleted.
 - `config.suites` keys are `<distro>/<suite>` and `splitSuiteKey` cuts on the
   **last** `/`, so a namespaced distro's per-suite override key has three
   segments (`customer/acme/stable` → distro `customer/acme`, suite `stable`).

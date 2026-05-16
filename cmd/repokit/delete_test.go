@@ -80,13 +80,37 @@ func TestDeleteByNameAndVersion(t *testing.T) {
 	assert.Contains(t, stdout, "deleted hello-gz_1.0_amd64")
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Contains(t, stdout, "run 'repokit publish --distro debian --suite bookworm'")
+	assert.Contains(t, stdout, "orphan pool files removed via 'repokit gc'")
 
 	assert.Equal(t, 1, rowCount(t, tmpState))
-	assert.Equal(t, 1, poolFileCount(t, tmpPublic))
-	assert.NoFileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
-		"hello-gz_1.0_amd64.deb"))
+	// delete is DB-only: the deleted row's pool file stays on disk as an
+	// orphan (indexes still point at it until publish; gc reaps it later).
+	assert.Equal(t, 2, poolFileCount(t, tmpPublic), "delete must not remove any pool file")
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+		"hello-gz_1.0_amd64.deb"), "deleted package's pool file survives as an orphan until gc")
 	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello",
 		"hello-xz_1.0_amd64.deb"))
+}
+
+// TestDeleteQuietSuppressesReport pins the --quiet contract for delete:
+// report() returns before any output, so neither the per-package lines nor
+// the publish/gc hint print — while the rows are still removed.
+func TestDeleteQuietSuppressesReport(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+	require.Equal(t, 1, rowCount(t, tmpState))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"--repo", tmpState, "--public", tmpPublic, "--quiet", "delete",
+		"--distro", "debian", "--suite", "bookworm",
+		"--name", "hello-gz", "--version", "1.0",
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
+	assert.Empty(t, stdout.String(), "--quiet must suppress all delete report output")
+	assert.Equal(t, 0, rowCount(t, tmpState), "delete must still remove the row under --quiet")
 }
 
 func TestDeleteBySHA256(t *testing.T) {
@@ -139,48 +163,22 @@ func TestDeleteAllVersions(t *testing.T) {
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Equal(t, 1, rowCount(t, tmpState))
 
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz"),
-		"emptied source shard dir must be pruned after the last package leaves it")
+	// delete is DB-only: it removes no pool files and prunes no dirs.
+	// The deleted row's file stays as an orphan; gc handles reaping and
+	// the empty-parent pruning (covered by gc_test.go).
+	assert.Equal(t, 2, poolFileCount(t, tmpPublic), "delete must not remove any pool file")
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+		"hello-gz_1.0_amd64.deb"), "deleted package's pool file survives as an orphan until gc")
 	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello"),
-		"sibling source dir under the same letter shard must remain (hello-xz still lives there)")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h"),
-		"letter-shard ancestor must remain while a sibling source dir is still occupied")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm"),
-		"suite dir must remain while any package still lives under it")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool"),
-		"per-distro pool root must never be pruned (stop boundary)")
+		"sibling source dir is untouched (hello-xz still lives there)")
 }
 
-// TestDeletePrunesEntireSuite covers the full-sweep case: when the last
-// package leaves a suite, the per-suite tree must be pruned all the way up
-// to (but not including) <publicDir>/<distro>/pool/. The stop-boundary
-// directory must survive so a subsequent add can recreate shards under it
-// without racing an external mkdir.
-func TestDeletePrunesEntireSuite(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
-
-	code, _, stderr := runDelete(t, tmpState, tmpPublic,
-		"--distro", "debian", "--suite", "bookworm",
-		"--name", "hello-gz", "--version", "1.0",
-	)
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm"),
-		"emptied suite subtree must be pruned all the way up")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool"),
-		"per-distro pool root must be preserved as the stop boundary")
-	assert.NotContains(t, stderr, "prune:", "no prune warning expected on the happy path")
-}
-
-// TestDeleteNamespacedDistroPrunes covers the namespaced-distro variant of
-// the full-sweep case: pruning a `customer/acme` chain must terminate at
-// <publicDir>/customer/acme/pool/, NOT at <publicDir>/customer/pool/. A
-// naive first-slash split of the disk path would mis-anchor the stop
-// boundary and could remove customer/acme/pool/ itself.
-func TestDeleteNamespacedDistroPrunes(t *testing.T) {
+// TestDeleteNamespacedDistro covers the namespaced-distro variant of a
+// full-version delete: the DB row is removed while the pool file (and its
+// parent dirs) survive as orphans for `repokit gc` to reap. The earlier
+// prune-anchoring concern (stop boundary at customer/acme/pool, not
+// customer/pool) now lives in gc_test.go's TestGcPrunesNamespacedDistro.
+func TestDeleteNamespacedDistro(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
 	initRepoForTest(t, tmpState)
@@ -214,11 +212,47 @@ func TestDeleteNamespacedDistroPrunes(t *testing.T) {
 	)
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 
-	assert.NoFileExists(t, poolFile, "deleted pool file must be gone")
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool", "stable"),
-		"emptied suite subtree must be pruned under the namespaced distro")
-	assert.DirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool"),
-		"namespaced pool root must be preserved (stop boundary anchored at customer/acme/pool, not customer/pool)")
+	assert.Equal(t, 0, rowCount(t, tmpState), "DB row must be gone after delete")
+	assert.FileExists(t, poolFile, "delete is DB-only; the pool file remains an orphan for gc")
+}
+
+// TestDeleteWorksWithoutPublicDir pins the DB-only contract: delete never
+// touches pool/dists, so it must not require public-dir resolution. With
+// public_dir left at the init template's REPLACE_ME and no --public /
+// $REPOKIT_PUBLIC, delete must still succeed instead of failing with
+// "public_dir is not set".
+func TestDeleteWorksWithoutPublicDir(t *testing.T) {
+	t.Setenv(envPublic, "")
+	tmpState := t.TempDir()
+	initRepoForTest(t, tmpState)
+	insertPackage(t, tmpState, repo.Package{
+		Distro:       "debian",
+		Suite:        "bookworm",
+		Component:    "main",
+		Architecture: "amd64",
+		Name:         "foo",
+		Version:      "1.0",
+		Filename:     "pool/bookworm/main/f/foo/foo_1.0_amd64.deb",
+		Size:         1,
+		MD5:          "00000000000000000000000000000000",
+		SHA1:         "0000000000000000000000000000000000000000",
+		SHA256:       "0000000000000000000000000000000000000000000000000000000000000000",
+		SHA512: "00000000000000000000000000000000000000000000000000000000000000000" +
+			"0000000000000000000000000000000000000000000000000000000000000000",
+		Control: "Package: foo\nVersion: 1.0\nArchitecture: amd64\n",
+	})
+	require.Equal(t, 1, rowCount(t, tmpState))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"--repo", tmpState, "delete",
+		"--distro", "debian", "--suite", "bookworm",
+		"--name", "foo", "--version", "1.0",
+	}, &stdout, &stderr, "test-rev")
+	require.Equal(t, exitOK, code, "stderr: %s", stderr.String())
+	assert.NotContains(t, stderr.String(), "public_dir is not set")
+	assert.Contains(t, stdout.String(), "deleted 1 package(s)")
+	assert.Equal(t, 0, rowCount(t, tmpState))
 }
 
 func TestDeleteDryRunMakesNoChanges(t *testing.T) {
@@ -302,21 +336,21 @@ func TestDeleteScopedToSuite(t *testing.T) {
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 
 	assert.Equal(t, 1, rowCount(t, tmpState))
-	assert.Equal(t, 1, poolFileCount(t, tmpPublic))
-	assert.NoFileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
-		"hello-gz_1.0_amd64.deb"))
+	// delete is DB-only: the bookworm row's pool file stays as an orphan;
+	// only the DB scoping (bookworm, not bullseye) is exercised here.
+	assert.Equal(t, 2, poolFileCount(t, tmpPublic), "delete must not remove any pool file")
+	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+		"hello-gz_1.0_amd64.deb"), "deleted package's pool file survives as an orphan until gc")
 	assert.FileExists(t, filepath.Join(tmpPublic, "debian", "pool", "bullseye", "main", "h", "hello-gz",
 		"hello-gz_1.0_amd64.deb"))
 }
 
-// TestDeleteSerializesWithConcurrentWriter guards the race where delete
-// commits its row removal and then unlinks pool files outside any lock: a
-// concurrent `add --replace` for the same NVRA could insert a fresh row
-// pointing at the same filename and write the new bytes into the dest
-// before delete's pool.Delete loop runs, silently destroying the just-
-// written bytes. The fix wraps the whole delete (rows + pool unlinks) in a
-// writer lock; this test holds that lock from another connection and
-// asserts delete blocks until release.
+// TestDeleteSerializesWithConcurrentWriter asserts delete blocks on the
+// writer lock. delete is DB-only now (no pool unlink), but DeleteConn must
+// still run on a writer-locked connection; SQLite serializes writers, so a
+// concurrent holder of the lock must make delete wait until release. This
+// test holds the lock from another connection and asserts delete does not
+// complete until the holder frees it, then checks the DB row is gone.
 func TestDeleteSerializesWithConcurrentWriter(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -372,8 +406,9 @@ func TestDeleteSerializesWithConcurrentWriter(t *testing.T) {
 		t.Fatal("delete did not finish after writer lock release")
 	}
 
-	assert.Equal(t, 0, rowCount(t, tmpState))
-	assert.Equal(t, 0, poolFileCount(t, tmpPublic))
+	assert.Equal(t, 0, rowCount(t, tmpState), "row removed once the writer lock frees up")
+	assert.Equal(t, 1, poolFileCount(t, tmpPublic),
+		"delete is DB-only; the pool file remains an orphan for gc")
 }
 
 // TestDeleteRejectsEmptyDistroSuite ensures the safety guard that requires
@@ -505,52 +540,4 @@ func TestDeleteAcceptsNamespacedDistro(t *testing.T) {
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "deleted 1 package(s)")
 	assert.Equal(t, 0, rowCount(t, tmpState))
-}
-
-// TestDeletePoolUnlinksTargetPublicDir is a focused regression check that the
-// pool unlink path uses ctx.PublicDir, not ctx.Root: the state dir must be
-// untouched by the delete, and the file under tmpPublic must be gone.
-func TestDeletePoolUnlinksTargetPublicDir(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
-
-	poolFile := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
-		"hello-gz_1.0_amd64.deb")
-	require.FileExists(t, poolFile)
-
-	statePre, err := os.ReadDir(tmpState)
-	require.NoError(t, err)
-
-	code, _, stderr := runDelete(t, tmpState, tmpPublic,
-		"--distro", "debian", "--suite", "bookworm",
-		"--name", "hello-gz", "--version", "1.0",
-	)
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-
-	assert.NoFileExists(t, poolFile, "pool file under public dir must be unlinked")
-	assert.Empty(t, listPoolFiles(t, tmpState), "no .deb should ever land in the state dir")
-
-	statePost, err := os.ReadDir(tmpState)
-	require.NoError(t, err)
-	prePostMatch := func(a, b []os.DirEntry) bool {
-		if len(a) != len(b) {
-			return false
-		}
-		seen := make(map[string]bool, len(a))
-		for _, e := range a {
-			seen[e.Name()] = true
-		}
-		for _, e := range b {
-			if !seen[e.Name()] {
-				return false
-			}
-		}
-		return true
-	}
-	assert.True(t, prePostMatch(statePre, statePost),
-		"state dir top-level entries must not change across a delete run")
-
-	assert.Equal(t, 0, rowCount(t, tmpState), "DB row should be gone after delete")
 }

@@ -43,6 +43,14 @@ type Filter struct {
 	SHA256       string
 }
 
+// PoolRef is the minimal projection of a packages row gc needs: the distro
+// and the apt-relative filename. Building a "known pool path" set from these
+// avoids materializing full Package rows or hashing any file.
+type PoolRef struct {
+	Distro   string
+	Filename string
+}
+
 // ErrDuplicate is returned by Insert when a package with the same
 // (distro, suite, component, architecture, name, version) tuple already
 // exists.
@@ -119,13 +127,6 @@ func (r *Repo) List(ctx context.Context, filter Filter) ([]Package, error) {
 	return queryPackages(ctx, r.db, filter, "")
 }
 
-// ListConn returns rows matching filter using the supplied connection,
-// reading the snapshot held by an explicit BEGIN IMMEDIATE on that
-// connection (see WithWriterLock).
-func (r *Repo) ListConn(ctx context.Context, conn *sql.Conn, filter Filter) ([]Package, error) {
-	return queryPackages(ctx, conn, filter, "")
-}
-
 // ExistsByFilenameConn reports whether any row in distro references filename,
 // using the supplied writer-locked connection (see WithWriterLock). Filename
 // is the apt-relative form stored in the DB (no leading distro segment).
@@ -143,6 +144,53 @@ func (r *Repo) ExistsByFilenameConn(ctx context.Context, conn *sql.Conn, distro,
 		return false, fmt.Errorf("checking filename %s/%s: %w", distro, filename, err)
 	}
 	return true, nil
+}
+
+// PoolRefs returns the distinct (distro, filename) pairs matching filter from
+// the read-only DB handle. gc uses this on its --dry-run path, where no writer
+// lock is needed because nothing is removed and a racing add cannot cause
+// data loss.
+func (r *Repo) PoolRefs(ctx context.Context, filter Filter) ([]PoolRef, error) {
+	return queryPoolRefs(ctx, r.db, filter)
+}
+
+// PoolRefsConn returns the distinct (distro, filename) pairs matching filter
+// using the supplied writer-locked connection (see WithWriterLock). gc holds
+// the writer lock across the whole scan-and-remove pass so an in-flight add
+// cannot have its just-written pool bytes classified as an orphan and deleted
+// before its row commits.
+func (r *Repo) PoolRefsConn(ctx context.Context, conn *sql.Conn, filter Filter) ([]PoolRef, error) {
+	return queryPoolRefs(ctx, conn, filter)
+}
+
+// queryPoolRefs is the shared implementation behind PoolRefs and
+// PoolRefsConn: SELECT DISTINCT distro, filename narrowed by filter. gc's
+// caller only populates distro/suite, so the generated WHERE collapses to
+// `[WHERE distro = ? [AND suite = ?]]` — no hashing, no per-row file I/O.
+func queryPoolRefs(ctx context.Context, q queryer, filter Filter) ([]PoolRef, error) {
+	where, args := buildWhere(filter, "")
+	stmt := "SELECT DISTINCT distro, filename FROM packages"
+	if where != "" {
+		stmt += " WHERE " + where
+	}
+	stmt += " ORDER BY distro, filename"
+	rows, err := q.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying pool refs: %w", err)
+	}
+	defer rows.Close()
+	var out []PoolRef
+	for rows.Next() {
+		var ref PoolRef
+		if err := rows.Scan(&ref.Distro, &ref.Filename); err != nil {
+			return nil, fmt.Errorf("scanning pool ref: %w", err)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pool refs: %w", err)
+	}
+	return out, nil
 }
 
 // Search returns rows where query matches name or control text

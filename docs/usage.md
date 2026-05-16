@@ -24,8 +24,9 @@ These apply to every subcommand and must precede the subcommand name.
 - **Public dir** — holds the per-distro `pool/` and `dists/` subtrees that a
   webserver will expose. Resolution chain: `--public` > `$REPOKIT_PUBLIC` >
   `public_dir` field in `<state-dir>/config.yaml`. Required for `add`,
-  `delete`, `publish`, and `verify`; ignored by `init`, `info`, `list`, and
-  `search`. The path must be **absolute**, must already **exist** as a
+  `publish`, `verify`, and `gc`; ignored by `init`, `info`, `list`,
+  `search`, and `delete` (`delete` is DB-only — it removes rows but never
+  reads or writes pool/dists, so an unset `public_dir` cannot block it). The path must be **absolute**, must already **exist** as a
   directory (`repokit` does not create it), must not contain control or NUL
   characters, and must not equal or be nested with the state dir in either
   direction (a leak would put `repo.db` and `config.yaml` under the
@@ -48,7 +49,7 @@ staging siblings. `--distro` may contain at most one `/` so it can name a
 namespaced distro (`customer/acme`) — each side of the slash is held to the
 `[a-zA-Z0-9-]+` distro alphabet, must be non-empty, and must not start with
 `-`. Whatever `--distro` resolves to must also appear in `config.yaml`'s
-`distros:` list for `add`, `delete`, `publish`, and `verify`.
+`distros:` list for `add`, `delete`, `publish`, `verify`, and `gc`.
 
 ## Exit codes
 
@@ -81,7 +82,7 @@ Errors if `<state-dir>/repo.db` already exists. A pre-existing `config.yaml`
 is left untouched. The starter `config.yaml` contains `signing_key:
 "REPLACE_ME"` and `public_dir: "REPLACE_ME"` — both must be edited before
 `publish` (without `--no-sign`) and any `add` / `delete` / `publish` /
-`verify` invocation respectively will succeed.
+`verify` / `gc` invocation respectively will succeed.
 
 ### `add`
 
@@ -112,6 +113,13 @@ pool file cannot be safely rolled back if a later item in the batch fails.
 A duplicate without `--replace` or `--skip-existing` prints the existing-vs-new
 sha256 diff before exiting with code 1.
 
+Re-adding a package that was previously `delete`d works without `--replace`:
+because `delete` is DB-only, the prior pool file survives as an orphan, and a
+plain `add` of the byte-identical `.deb` re-adopts that file in place and
+re-inserts the row. Only a pool file whose bytes **differ** from the incoming
+`.deb` (and has no DB row) still hard-errors with `pool: <path> already
+exists` — `--replace` remains the only way to clobber differing content.
+
 `--skip-existing` makes batch re-adds idempotent: each duplicate NVRA is logged
 on stderr as `skipping <name>_<ver>_<arch>: already present in
 <distro>/<suite>/<component>` and the batch continues. The summary becomes
@@ -130,13 +138,20 @@ insert.
 
 ### `delete`
 
-Remove packages from a suite. Mutates `repo.db` and `pool/` only — running
+Remove packages from a suite. Mutates `repo.db` **only** — it deletes the
+matching `packages` rows and never touches the `pool/` tree. Running
 `publish` afterwards is required to remove the entries from the apt indexes.
 A subsequent `publish` (with explicit `--distro`/`--suite` or both omitted)
 rebuilds `<distro>/dists/<suite>/` even when `delete` emptied the suite —
 empty `Packages` files and a `Release` with empty
 `Architectures:`/`Components:` are written so apt clients stop seeing the
 removed packages.
+
+Because `delete` leaves the pool files in place, the published indexes keep
+resolving every `.deb` they list right up until the next `publish` — apt
+clients hitting the repo in the `delete`→`publish` window get no `404`s. The
+now-unreferenced files become **orphans** and are reclaimed only by an
+explicit `repokit gc` (see below); `publish` never prunes them.
 
 ```
 repokit delete --distro <d> --suite <s> [filters...] [--all-versions] [--dry-run]
@@ -157,12 +172,11 @@ repokit delete --distro <d> --suite <s> [filters...] [--all-versions] [--dry-run
 \* At least one of `--name` or `--sha256` is required to prevent a typo from
 wiping a whole suite.
 
-After each pool file is removed, empty ancestor directories under
-`<distro>/pool/<suite>/<comp>/<letter>/<src>/` are pruned up to — but not
-including — `<distro>/pool/`. The per-distro pool root is always preserved
-so a subsequent `add` can recreate shard directories under it. Prune
-failures are non-fatal and surface on stderr as `prune: <error>`; the DB
-row and the unlink are already committed by that point.
+`delete` performs no pool I/O at all — there is no unlink and no
+empty-parent prune. The matching rows are removed inside a single
+writer-locked transaction; pruning the disk bytes those rows pointed at is
+deferred to `repokit gc`, which walks the pool tree and removes everything
+no row references.
 
 ### `list`
 
@@ -249,35 +263,95 @@ Pool files are never touched by publish.
 
 ### `verify`
 
-Rehash pool files against the four hashes stored in the database, and (with
-`--gc`) garbage-collect orphan pool files that have no DB row.
+Rehash pool files against the four hashes stored in the database and report
+inconsistencies. `verify` is strictly **read-only** — it never removes pool
+files or DB rows.
 
 ```
-repokit verify [--distro <d>] [--suite <s>] [--gc]
+repokit verify [--distro <d>] [--suite <s>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--distro <d>` | — | limit to one distribution (plain or namespaced) |
 | `--suite <s>` | — | limit to one suite (requires `--distro`) |
-| `--gc` | off | remove orphan pool files |
 
-Output lines are `mismatch <path>`, `missing <path>`, `orphan <path>` (or
-`orphan <path> (removed)` under `--gc`), followed by either `verify: ok` or a
-counts summary. Exit code is 0 when the scope is clean (after any `--gc`
-removals), 1 otherwise.
+For every `packages` row in scope, the referenced pool file is re-hashed and
+compared against the stored md5/sha1/sha256/sha512. The pool subtree in scope
+is then walked for files no row references.
 
-`--gc` never deletes DB rows that point at a missing pool file — that
-resolution requires a manual decision. After each orphan is removed,
-empty ancestor directories are pruned up to (but not including)
-`<distro>/pool/`, mirroring `delete`. Prune failures are warned on stderr
-as `prune: <error>` and do not abort the GC run.
+Output lines are `mismatch <path>` (stored hashes disagree with the file on
+disk), `missing <path>` (a row points at a pool file that is gone), and
+`orphan <path>` (a pool file with no DB row), followed by either `verify: ok`
+or a `verify: N mismatch(es), M missing, K orphan(s)` summary. Findings are
+always printed; `--quiet` suppresses only the trailing status line. Exit code
+is 0 when the scope is clean (no mismatches, no missing files, no orphans),
+1 otherwise.
+
+`verify` does not act on any finding. An `orphan` is the operator's signal to
+run `repokit gc`; a `missing` row, or a `mismatch`, requires a manual
+decision (`verify` never deletes a row pointing at a missing or wrong file).
+Because `delete` is DB-only, an orphan is the normal, expected state of a
+just-deleted-but-not-yet-`gc`'d package — `verify` flagging it (and exiting
+non-zero) is by design, not corruption.
 
 Files under `pool/` whose names end in `.tmp` or `.bak` are transient
-artifacts of an in-flight or crashed `add`. They are not reported as orphans
-— `--gc` would otherwise destroy the only recoverable copy after an
-interrupted `--replace`. They are cleaned up automatically by the next
-successful write at the same path.
+artifacts of an in-flight or crashed `add`. They are never reported as
+orphans (and never removed by `gc`) — that would destroy the only
+recoverable copy after an interrupted `--replace`. They are cleaned up
+automatically by the next successful write at the same path.
+
+### `gc`
+
+Remove orphan pool files: regular files under `<distro>/pool/...` that no
+`packages` row references. `gc` is the **only** command that deletes pool
+files. It never touches the database — `delete` retires rows; `gc` later
+reclaims the disk bytes those retired rows used to point at.
+
+```
+repokit gc [--distro <d>] [--suite <s>] [--dry-run]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--distro <d>` | — | limit gc to one distribution (plain or namespaced) |
+| `--suite <s>` | — | limit gc to one suite (requires `--distro`) |
+| `--dry-run` | off | print the orphans that would be removed; make no changes |
+
+`gc` is deliberately orphan-only and existence-based: there are no
+`--name` / `--sha256` surgical filters (that is `delete`'s job) and no
+hashing (that is `verify`'s job — `gc` only needs the set of pool paths the
+DB still knows). It also never deletes a DB row, so a row pointing at a
+missing pool file is left untouched for the operator to resolve.
+
+Output is one `removed <path>` line per orphan (`would remove <path>` under
+`--dry-run`), followed by a `gc: removed N orphan(s)` (or
+`gc: would remove N orphan(s)`) summary. Per-orphan lines are always printed;
+`--quiet` suppresses only the trailing summary. After each orphan is removed,
+empty ancestor directories are pruned up to — but not including —
+`<distro>/pool/`, mirroring the old `delete` behavior. Prune failures are
+non-fatal and surface on stderr as `prune: <error>`.
+
+Orphan presence is **not** a failure — `gc` is the action that resolves it —
+so both a clean run and a run that removed orphans exit 0. A real removal
+takes a writer lock spanning the scan and the unlink so a concurrent `add`
+(which writes pool bytes before its row commits) cannot have its in-flight
+file misclassified as an orphan and deleted. `--dry-run` takes no lock
+(nothing is removed, so a snapshot read is safe) and never modifies disk.
+
+`--suite` requires `--distro` (the pool tree is rooted per distro, so a bare
+`--suite` has no single subtree to walk); supplying `--suite` without
+`--distro` is a usage error (exit 2). Whatever `--distro` resolves to must appear in
+`config.yaml`'s `distros:` list; an unconfigured distro aborts with exit 1.
+When neither scope flag is given, `gc` walks the pool of every configured
+distro and leaves unrelated top-level directories under the public dir
+untouched.
+
+> **Migrating from `verify --gc`:** the `--gc` flag was removed (pre-1.0, no
+> deprecation alias). Replace `repokit verify --gc` with `repokit gc`, and
+> `repokit verify --gc --distro X --suite Y` with
+> `repokit gc --distro X --suite Y`. Use `repokit verify` (no flag) when you
+> only want the read-only report.
 
 ### `info`
 
@@ -370,9 +444,9 @@ suites:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `distros` | list of strings | yes for add/delete/publish/verify | `[]` | distros repokit is allowed to manage; each entry is either a plain `[a-zA-Z0-9-]+` segment or two such segments joined by exactly one `/` (`customer/acme`); no duplicates, no entry deeper than one `/`, a plain entry may not share its top-level segment with a namespaced one (`[customer, customer/acme]` is rejected), and every `suites:` key's distro half must appear here |
+| `distros` | list of strings | yes for add/delete/publish/verify/gc | `[]` | distros repokit is allowed to manage; each entry is either a plain `[a-zA-Z0-9-]+` segment or two such segments joined by exactly one `/` (`customer/acme`); no duplicates, no entry deeper than one `/`, a plain entry may not share its top-level segment with a namespaced one (`[customer, customer/acme]` is rejected), and every `suites:` key's distro half must appear here |
 | `signing_key` | string | yes (unless `--no-sign`) | — | gpg key id or fingerprint that signs `Release` |
-| `public_dir` | string | yes for add/delete/publish/verify (unless `--public` / `$REPOKIT_PUBLIC` is set) | — | absolute path to the public-facing tree |
+| `public_dir` | string | yes for add/publish/verify/gc (unless `--public` / `$REPOKIT_PUBLIC` is set); not needed by DB-only `delete` | — | absolute path to the public-facing tree |
 | `suites` | map | no | `{}` | per-suite Release header overrides keyed by `<distro>/<suite>` (a namespaced distro yields a three-segment key like `customer/acme/stable` — the key is split on its **last** `/`) |
 | `suites[k].origin` | string | no | `<distro>` | `Origin:` field in `Release` |
 | `suites[k].label` | string | no | `<distro>` | `Label:` field in `Release` |

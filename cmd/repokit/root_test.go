@@ -459,7 +459,7 @@ func snapshotRoot(t *testing.T, root string) []string {
 func TestNeedsPublic(t *testing.T) {
 	cases := map[string]bool{
 		"add":        true,
-		"delete":     true,
+		"delete":     false,
 		"publish":    true,
 		"verify":     true,
 		"init":       false,

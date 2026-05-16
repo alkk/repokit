@@ -48,9 +48,16 @@ shows it before running `publish` without `--no-sign`.
 | `list` | list packages matching filters |
 | `search` | substring search by name or description |
 | `publish` | rebuild and sign `<distro>/dists/` for one or more suites |
-| `verify` | rehash pool files and (optionally) GC orphans |
+| `verify` | rehash pool files and report mismatches/orphans (read-only) |
+| `gc` | remove orphan pool files (files with no database row) |
 | `info` | inspect a `.deb` without touching the repo |
 | `completion` | print a shell-completion wiring script (`bash`, `zsh`, or `fish`) |
+
+`delete` is database-only — it removes rows but leaves the pool files on
+disk as orphans so the published indexes keep resolving until the next
+`publish`. Reclaim that disk space with the explicit `repokit gc`. The old
+`verify --gc` flag was removed (no deprecation alias): replace any
+`repokit verify --gc` invocation with `repokit gc`.
 
 See [docs/usage.md](docs/usage.md) for the full flag reference.
 
@@ -88,8 +95,9 @@ signing config and SQLite database — never serve it.
 The state dir is resolved from `--repo` > `$REPOKIT_ROOT` > `~/.repokit/`. The
 current working directory is **not** consulted. Every command except `init`
 and `info` requires a `repo.db` in the resolved state dir; commands that
-touch the public tree (`add`, `delete`, `publish`, `verify`) additionally
-require the public dir to be set and to exist.
+touch the public tree (`add`, `publish`, `verify`, `gc`)
+additionally require the public dir to be set and to exist. `delete` is
+database-only and runs without a resolvable public dir.
 
 ## Quickstart
 
@@ -160,9 +168,9 @@ The tree is fully static — any HTTPS server (S3, nginx, GitHub Pages) will do.
 ## Configuration
 
 The state-dir `config.yaml` lists the distros repokit is allowed to manage.
-Every `--distro` argument to `add`, `delete`, `publish`, and `verify` must
-appear in this list; an unconfigured value is rejected before any pool or
-dists write. The public dir may hold unrelated top-level directories — those
+Every `--distro` argument to `add`, `delete`, `publish`, `verify`, and `gc`
+must appear in this list; an unconfigured value is rejected before any pool
+or dists write. The public dir may hold unrelated top-level directories — those
 are never walked.
 
 ```yaml

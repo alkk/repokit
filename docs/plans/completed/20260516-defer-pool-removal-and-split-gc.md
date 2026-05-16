@@ -234,18 +234,18 @@ Flow:
 - Create: `cmd/repokit/orphans_test.go`
 - Modify: `cmd/repokit/verify.go`
 
-- [ ] create `cmd/repokit/orphans.go`; move `scanOrphans` (rename to
+- [x] create `cmd/repokit/orphans.go`; move `scanOrphans` (rename to
       `scanPoolForOrphans`), `scanOrphansAcrossDistros` (rename to
       `scanPoolForOrphansAcrossDistros`), `removeOrphans`, and
       `matchOrphanDistro` verbatim from `verify.go`
-- [ ] keep `scopePoolDir` and `poolDirName` co-located with the helpers
+- [x] keep `scopePoolDir` and `poolDirName` co-located with the helpers
       (move them too — they are only consumed by the orphan walk)
-- [ ] in `verify.go`, replace the moved-function call sites with calls into
+- [x] in `verify.go`, replace the moved-function call sites with calls into
       the new helpers; verify imports prune cleanly
-- [ ] write `orphans_test.go` covering the walk: `.tmp`/`.bak` skip, the
+- [x] write `orphans_test.go` covering the walk: `.tmp`/`.bak` skip, the
       scoped (distro/suite) path, the unscoped (distros list) path, and
       the longest-prefix `matchOrphanDistro` rule
-- [ ] run `make test` and `make lint` — must pass with no behavior change
+- [x] run `make test` and `make lint` — must pass with no behavior change
       visible to existing tests
 
 ### Task 2: Add `gc` subcommand
@@ -255,25 +255,32 @@ Flow:
 - Create: `cmd/repokit/gc_test.go`
 - Modify: `cmd/repokit/main.go`
 
-- [ ] add `cmdGc = "gc"` constant and `Gc GcCmd` field on `Options`; add
+- [x] add `cmdGc = "gc"` constant and `Gc GcCmd` field on `Options`; add
       dispatch case; add `cmdGc` to `needsPublic` and `needsConfig`
-- [ ] create `cmd/repokit/gc.go` with `GcCmd`, `Execute`, `run`, flag
+      (note: `needsConfig` returns true via its `default:` branch for every
+      command except init/info/completion, so `gc` is already covered with
+      no edit — only `needsPublic` needed the explicit `cmdGc` case)
+- [x] create `cmd/repokit/gc.go` with `GcCmd`, `Execute`, `run`, flag
       validation, and the writer-locked scan/remove flow described in
       *Technical Details*
-- [ ] build `known` via a focused query
+- [x] build `known` via a focused query
       (`SELECT DISTINCT distro, filename FROM packages [WHERE distro=? [AND suite=?]]`);
-      no hashing, no per-row file I/O
-- [ ] write `gc_test.go` covering: happy path (orphan removed, parents
+      no hashing, no per-row file I/O (new `repo.PoolRefs` /
+      `repo.PoolRefsConn` + `knownPoolSet`)
+- [x] write `gc_test.go` covering: happy path (orphan removed, parents
       pruned), scoped `--distro` only, scoped `--distro` + `--suite`,
       `--dry-run` leaves files on disk and exits OK, empty pool tree,
       cross-distro isolation (gc scoped to one distro leaves others alone),
       `.tmp`/`.bak` skip, `--suite` without `--distro` rejected as usage
-      error
-- [ ] write a race/concurrency test for `gc` modeled on
+      error (plus namespaced-distro prune, unconfigured-distro abort, and
+      unsafe-scope rejection; `repo` query helpers unit-tested in
+      `queries_test.go`)
+- [x] write a race/concurrency test for `gc` modeled on
       `TestVerifyGCSerializesWithConcurrentWriter` in
       `verify_test.go` — port the structure (writer-lock holds across
       the walk so an in-flight `add` does not lose its pool bytes)
-- [ ] run `make test` and `make lint` — new command works end-to-end
+      (`TestGcSerializesWithConcurrentWriter`)
+- [x] run `make test` and `make lint` — new command works end-to-end
 
 ### Task 3: Remove `--gc` from `verify`
 
@@ -281,19 +288,25 @@ Flow:
 - Modify: `cmd/repokit/verify.go`
 - Modify: `cmd/repokit/verify_test.go`
 
-- [ ] drop `GC bool` field from `VerifyCmd`
-- [ ] drop `verifyAndGC` and the `cmd.GC` branch in `run`; collapse to the
+- [x] drop `GC bool` field from `VerifyCmd`
+- [x] drop `verifyAndGC` and the `cmd.GC` branch in `run`; collapse to the
       `verifyOnly` path; remove the `WithWriterLock` usage (verify is now
-      read-only)
-- [ ] drop the `gc` parameter from `verifyReport.passed`; update callers
-- [ ] drop the `(removed)` branch in `printReport`; orphans always print
+      read-only). Also inlined the now-single-caller `scanOrphansForScope`
+      into `verifyOnly` per *Technical Details*, and dropped the now-unused
+      `database/sql` import.
+- [x] drop the `gc` parameter from `verifyReport.passed`; update callers
+- [x] drop the `(removed)` branch in `printReport`; orphans always print
       as `orphan <path>` with verify returning `exitError` when any exist
-- [ ] update `verify_test.go`: drop all `--gc`-flag tests including
-      `TestVerifyGCSerializesWithConcurrentWriter` (the gc race test
-      lives in `gc_test.go` after Task 2); tighten the remaining
-      orphan-reporting cases to assert verify now exits non-zero
-      whenever orphans are present
-- [ ] run `make test` and `make lint`
+- [x] update `verify_test.go`: dropped the pure gc-mechanics tests
+      (`TestVerifyGCRemovesOnlyOrphan`, `…KeepsSiblingTreeIntact`,
+      `…PrunesNamespacedDistro`, `…DoesNotRemoveRowsForMissingPoolFiles`,
+      `TestVerifyGCSerializesWithConcurrentWriter` — all covered by
+      `gc_test.go`/`orphans_test.go`); converted the scoping/safety/
+      reporting cases to the read-only contract (no `--gc`, assert
+      `exitError` whenever orphans are present, files always survive);
+      added `TestVerifyGCFlagRejected` proving `verify --gc` is now an
+      unknown-flag usage error
+- [x] run `make test` and `make lint`
 
 ### Task 4: Make `delete` DB-only
 
@@ -301,17 +314,17 @@ Flow:
 - Modify: `cmd/repokit/delete.go`
 - Modify: `cmd/repokit/delete_test.go`
 
-- [ ] in `runDelete`, drop the `pool.Delete` + `pool.PruneEmptyParents`
+- [x] in `runDelete`, drop the `pool.Delete` + `pool.PruneEmptyParents`
       loop, drop `poolErr`/`poolErrIdx` accounting, drop the partial-
       failure branch in `report`
-- [ ] keep `WithWriterLock` + `DeleteConn` (Option A from *Technical
+- [x] keep `WithWriterLock` + `DeleteConn` (Option A from *Technical
       Details*); rewrite the block comment to a one-liner noting that
       `DeleteConn` requires a writer-locked connection (not an active
       serialization choice)
-- [ ] update `report`'s closing line to point at both `publish` and `gc`
+- [x] update `report`'s closing line to point at both `publish` and `gc`
       (full text in *Technical Details*)
-- [ ] drop `pkg/pool` import if unused
-- [ ] update `delete_test.go` — concrete inventory:
+- [x] drop `pkg/pool` import if unused
+- [x] update `delete_test.go` — concrete inventory:
       - `TestDeleteByNameAndVersion`: flip the post-delete pool-file
         assertions from `NoFileExists` to `FileExists`
       - `TestDeleteNamespacedDistroPrunes`: same flip; the prune
@@ -331,29 +344,59 @@ Flow:
         test now proves "delete blocks on the writer lock", not the
         old DB+pool race; assert DB row count instead of pool file
         count
-- [ ] add one positive test (or extend `TestDeleteByNameAndVersion`)
+      - ➕ `TestDeleteAllVersions`: not in the original inventory but
+        carried prune assertions that no longer hold under DB-only
+        delete; converted to assert the pool tree stays intact
+        (orphan left behind, no pruning)
+- [x] add one positive test (or extend `TestDeleteByNameAndVersion`)
       that asserts the pool file is **still present on disk** after
       delete (i.e. now an orphan) — this is the load-bearing positive
-      assertion of the whole change
-- [ ] run `make test` and `make lint`
+      assertion of the whole change (extended `TestDeleteByNameAndVersion`)
+- [x] run `make test` and `make lint`
+- ➕ `integration_test.go` L234 (`TestIntegration_MultiSuiteMultiArch‐
+      MultiComponent`): the pre-existing `fs.ErrNotExist` assertion broke
+      under DB-only delete, so flipped it to `assert.FileExists` here to
+      keep `make test` green (mandated "update existing tests when
+      behavior changes"). Task 5's remaining items — the follow-on `gc`
+      call, the new full-flow integration case, the `verify --gc` grep —
+      are untouched and still open under Task 5.
 
 ### Task 5: Update integration tests
 
 **Files:**
 - Modify: `cmd/repokit/integration_test.go`
 
-- [ ] flip the concrete assertion at `integration_test.go` L230-234
-      (the `deletedPool` `ErrorIsf ... fs.ErrNotExist` block in
-      `TestIntegration_MultiSuiteMultiArchMultiComponent`): the file
-      must now still exist after delete. Add a follow-on `gc` call in
-      the same test and re-assert `fs.ErrNotExist` after that
-- [ ] add a fresh integration case that exercises the full new flow:
-      `add → delete → assert pool file still on disk → publish → assert published Packages does not list deleted package → gc → assert pool file gone`
-- [ ] grep for `verify --gc` invocations; replace any with `gc`
-- [ ] `integration_realpkg_test.go` was audited and has no pool-
-      deletion assertions; no changes expected there (re-verify
-      during implementation in case of drift)
-- [ ] run `make test` and `make race`
+- [x] flip the concrete assertion at `integration_test.go` L230-234
+      (the `deletedPool` block in
+      `TestIntegration_MultiSuiteMultiArchMultiComponent`): the
+      `FileExists` flip already landed under Task 4; this task added the
+      follow-on `runCmd("gc", "--distro", "debian")` call and the
+      `require.ErrorIsf(... fs.ErrNotExist)` re-assertion (plus a
+      `FileExists` check that the still-referenced bullseye survivor is
+      untouched by gc)
+- [x] add a fresh integration case that exercises the full new flow:
+      `TestIntegration_DeleteDefersPoolRemovalUntilGc` —
+      `add alpha+beta → publish → delete alpha → assert alpha pool file
+      still on disk → publish → assert rebuilt Packages drops alpha but
+      keeps beta and alpha's pool file STILL survives the republish →
+      gc → assert alpha pool gone, beta pool (DB-referenced) untouched`.
+      Uses a beta survivor so the post-delete Packages file still exists
+      (an emptied component/arch is skipped by `writeIndexes`)
+- [x] grep for `verify --gc` invocations; replace any with `gc` — the
+      grep surfaced stale references beyond `integration_test.go`:
+      fixed the three user-facing `run 'repokit verify --gc' to reclaim`
+      stderr strings + two comments in `cmd/repokit/add.go`, the
+      `add/delete/verify --gc/concurrent` comment in
+      `cmd/repokit/publish.go`, and the example-caller comments in
+      `pkg/pool/pool.go` and `pkg/repo/repo.go`. The intentional
+      `verify --gc`-rejection docstring/test in `verify_test.go` is left
+      as-is (it documents the breaking removal)
+- [x] `integration_realpkg_test.go` was audited and has no pool-
+      deletion assertions; re-verified — its only `fs.ErrNotExist`
+      assertion (L145) is the "no binary-all directory" check, unrelated
+      to delete; no changes made
+- [x] run `make test` and `make race` — both green (make test 83.5%
+      coverage; make race all packages ok; make lint also run, 0 issues)
 
 ### Task 6: Update documentation
 
@@ -361,45 +404,80 @@ Flow:
 - Modify: `CLAUDE.md`
 - Modify: `docs/usage.md`
 
-- [ ] update CLAUDE.md "Architecture" — the "Flow of a typical write
+- [x] update CLAUDE.md "Architecture" — the "Flow of a typical write
       command" bullets should note that `delete` only touches the DB now,
-      and `gc` is the operator-driven reaper
-- [ ] add `gc` to the subcommand list / `needsPublic` description
-- [ ] update CLAUDE.md "Gotchas" — drop or rephrase any item that talks
-      about delete's pool unlink + writer-lock motivation; mention that
-      `verify` is read-only and `verify --gc` no longer exists; mention
-      that orphans accumulate until `gc` runs (operator responsibility)
-- [ ] (optional, piggybacked) `s/root.go/main.go/` sweep in CLAUDE.md
-      where stale references survive from commit `d52f5fc`'s
-      root.go→main.go merge; decide once and call out in the commit
-      message
-- [ ] rewrite the `--gc` section of `docs/usage.md` (7 references at
-      L253, L256, L263, L266, L267, L270, L278) — the
-      "verify --gc" subsection becomes a "gc" subsection; the "Pool /
-      DB consistency" subsection (around L270) needs its ownership
-      boundary rephrased to reflect that `delete` no longer touches
-      the pool
-- [ ] grep `README.md` once more as a sanity check (current count: 0
-      `--gc` hits); only edit if the grep finds something
-- [ ] no test step (docs only)
+      and `gc` is the operator-driven reaper (step 3 now states `delete`
+      is DB-only; added a dedicated "Orphan reaping is split out" paragraph
+      covering the delete→publish consistency window, the explicit `gc`
+      reaper, the shared `orphans.go` helpers, and the read-only `verify`)
+- [x] add `gc` to the subcommand list / `needsPublic` description
+      (`Context.PublicDir` bullet now lists `gc` in the `needsPublic`
+      set; `Context.Config` bullet adds `gc` to the
+      `requireConfiguredDistro` enumeration)
+- [x] update CLAUDE.md "Gotchas" — no existing item described delete's
+      pool-unlink + writer-lock motivation (it lived in code comments,
+      swept in Task 5), so added two new gotchas: (1) `delete` is DB-only
+      and orphans accumulate until `gc` (operator responsibility, never
+      auto-pruned, "don't re-add the unlink"); (2) `verify` is read-only
+      with no `--gc` flag, plus the shared writer-lock-spanning-the-scan
+      invariant
+- [x] (optional, piggybacked) `s/root.go/main.go/` sweep done — all six
+      stale `root.go` references in CLAUDE.md (Architecture intro,
+      `Context.PublicDir`, `Context.Config`, scope-validation,
+      `resolvePublicDir`, `defaultStateDir` gotcha) now point at
+      `main.go`; commit `d52f5fc` confirmed as the root.go→main.go merge.
+      Called out in the commit message
+- [x] rewrite the `--gc` section of `docs/usage.md` — `verify` subsection
+      rewritten as strictly read-only (no `--gc` flag, exits non-zero on
+      any finding, never acts); a new `gc` subsection added after it
+      (flags, output, lock semantics, scope rules, dry-run) with a
+      "Migrating from `verify --gc`" callout; the `delete` subsection's
+      ownership boundary rephrased to "DB-only, leaves orphans" and its
+      stale "after each pool file is removed … pruned" paragraph replaced;
+      `add/delete/publish/verify` enumerations (public-dir resolution,
+      scope-validation, init `config.yaml` note, config table `distros`
+      and `public_dir` required-for rows) all extended with `gc`
+- [x] grep `README.md` once more as a sanity check — 0 `--gc` /
+      `verify --gc` / `gc` hits confirmed; no edit needed
+- [x] no test step (docs only)
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] all five brainstorm decisions are reflected in code
-- [ ] `repokit delete --distro X --suite Y --name pkg` leaves pool file on
+- [x] all five brainstorm decisions are reflected in code (verified by
+      inspection: (1) `delete.go` is DB-only with no `pkg/pool` import and
+      `publish.go` has no prune logic — pool removal lives only in
+      `gc.go`'s `removeOrphans`; (2) `verify.go` has no `GC` field,
+      `TestVerifyGCFlagRejected` proves the flag is gone; (3) `main.go`
+      defines `cmdGc = "gc"` + dispatch + `needsPublic`; (4) `GcCmd` has
+      only `Distro`/`Suite`/`DryRun` — orphan-only, no `--name`/`--sha256`;
+      (5) `gc.go` builds `known` via `PoolRefs`/`knownPoolSet` with no
+      hashing)
+- [x] `repokit delete --distro X --suite Y --name pkg` leaves pool file on
       disk; subsequent `repokit publish` rebuilds indexes without it;
       subsequent `repokit gc` removes the file and prunes empty parents
-- [ ] `repokit verify` reports orphans and exits non-zero; never removes
-- [ ] `repokit verify --gc` errors out as an unknown flag
-- [ ] `gc --suite X` without `--distro` returns a usage error
-- [ ] `make test`, `make race`, `make lint` all green
-- [ ] shell completion lists `gc` (smoke-test:
-      `GO_FLAGS_COMPLETION=verbose .bin/repokit ''` includes `gc`)
+      (proven end-to-end by `TestIntegration_DeleteDefersPoolRemovalUntilGc`
+      — PASS)
+- [x] `repokit verify` reports orphans and exits non-zero; never removes
+      (`TestVerifyOrphanDetected` — PASS: `exitError`, `orphan …` printed,
+      `FileExists` after run, no `(removed)`)
+- [x] `repokit verify --gc` errors out as an unknown flag
+      (`TestVerifyGCFlagRejected` — PASS: `exitUsage`, stderr "unknown
+      flag" + "gc")
+- [x] `gc --suite X` without `--distro` returns a usage error
+      (`TestGcSuiteWithoutDistroIsUsageError` — PASS: `exitUsage`, stderr
+      "--suite requires --distro")
+- [x] `make test`, `make race`, `make lint` all green (make test: all
+      packages ok, 83.5% coverage; make race: all packages ok;
+      golangci-lint: 0 issues — run with a writable `GOCACHE` /
+      `GOLANGCI_LINT_CACHE` since the sandbox `~/.cache` is read-only)
+- [x] shell completion lists `gc` (smoke-test:
+      `GO_FLAGS_COMPLETION=verbose .bin/repokit ''` output includes `gc`,
+      alongside add/completion/delete/info/init/list/publish/search/verify)
 
 ### Task 8: Move plan to completed
 
-- [ ] `mkdir -p docs/plans/completed`
-- [ ] `git mv docs/plans/20260516-defer-pool-removal-and-split-gc.md docs/plans/completed/`
+- [x] `mkdir -p docs/plans/completed`
+- [x] `git mv docs/plans/20260516-defer-pool-removal-and-split-gc.md docs/plans/completed/`
 
 ## Post-Completion
 

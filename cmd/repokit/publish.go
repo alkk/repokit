@@ -158,7 +158,7 @@ func publishScope(ctx context.Context, publicDir string, r *repo.Repo, cfg *conf
 
 // publishScopeLocked is the body of publishScope, running under the writer
 // lock. Reads through r.db still see the latest committed state; the lock's
-// role is to block other writers (add/delete/verify --gc/concurrent
+// role is to block other writers (add/delete/gc/concurrent
 // publishScope) from committing until the swap completes.
 func publishScopeLocked(ctx context.Context, publicDir string, r *repo.Repo, cfg *config.Config,
 	signer sign.Signer, distro, suite string) (err error) {

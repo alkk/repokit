@@ -95,7 +95,7 @@ func (r *Repo) Tx(ctx context.Context, fn func(tx *sql.Tx) error) (err error) {
 // (an Insert/Delete inside Tx, or another WithWriterLock holder) blocks
 // until fn returns. Use this when fn must coordinate a database snapshot
 // with filesystem mutations whose correctness depends on no other writer
-// committing in between — e.g. verify --gc, which deletes pool files
+// committing in between — e.g. gc, which deletes pool files
 // based on the set of committed rows. Without the lock, a concurrent add
 // can write its pool bytes while its transaction is still uncommitted;
 // the gc walk sees that file as an orphan and removes it before the row

@@ -108,8 +108,13 @@ func (cmd *AddCmd) run(c *Context) error {
 				}
 				return perr
 			}
-			written = append(written, diskPath)
-			backups = append(backups, backup)
+			// An empty diskPath means processOne re-adopted a byte-identical
+			// orphan in place and wrote nothing, so there is no pool action
+			// to undo — keep it out of the rollback ledger.
+			if diskPath != "" {
+				written = append(written, diskPath)
+				backups = append(backups, backup)
+			}
 			if stale != "" {
 				staleReplaced = append(staleReplaced, stale)
 			}
@@ -158,10 +163,10 @@ func (cmd *AddCmd) run(c *Context) error {
 // sweepStaleReplaced removes pool files orphaned when --replace pointed at a
 // different shard than the new path (e.g. the .deb's Source field changed
 // between versions). The DB has already committed, so a failure here is a
-// benign cleanup hiccup that verify --gc can reclaim; warn rather than
+// benign cleanup hiccup that `repokit gc` can reclaim; warn rather than
 // reporting the whole add as failed. Empty parents are pruned after each
 // successful unlink so a Source-field change does not leave behind an empty
-// shard subtree that verify --gc cannot reach (no orphan, no row).
+// shard subtree that gc cannot reach (no orphan, no row).
 //
 // The cleanup runs under the SQLite writer lock for two reasons. First, once
 // inside the callback no concurrent writer can MkdirAllSync our shard and
@@ -181,14 +186,14 @@ func (cmd *AddCmd) sweepStaleReplaced(
 			filename := strings.TrimPrefix(p, distroPrefix)
 			owned, qerr := r.ExistsByFilenameConn(ctx, conn, string(cmd.Distro), filename)
 			if qerr != nil {
-				fmt.Fprintf(c.Stderr, "warning: revalidating replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, qerr)
+				fmt.Fprintf(c.Stderr, "warning: revalidating replaced pool file %s: %v — run 'repokit gc' to reclaim\n", p, qerr)
 				continue
 			}
 			if owned {
 				continue
 			}
 			if err := pool.Delete(c.PublicDir, p); err != nil {
-				fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'repokit verify --gc' to reclaim\n", p, err)
+				fmt.Fprintf(c.Stderr, "warning: removing replaced pool file %s: %v — run 'repokit gc' to reclaim\n", p, err)
 				continue
 			}
 			if err := pool.PruneEmptyParents(c.PublicDir, string(cmd.Distro), p); err != nil {
@@ -198,7 +203,7 @@ func (cmd *AddCmd) sweepStaleReplaced(
 		return nil
 	})
 	if lockErr != nil {
-		fmt.Fprintf(c.Stderr, "warning: stale-replacement cleanup: %v — run 'repokit verify --gc' to reclaim\n", lockErr)
+		fmt.Fprintf(c.Stderr, "warning: stale-replacement cleanup: %v — run 'repokit gc' to reclaim\n", lockErr)
 	}
 }
 
@@ -258,6 +263,12 @@ func (cmd *AddCmd) processOne(
 		}
 	}
 
+	// Insert MUST precede writePool: add holds the SQLite writer lock from
+	// its first write statement until commit, so issuing the INSERT before
+	// any pool bytes hit disk guarantees a concurrent `repokit gc` (which
+	// takes the writer lock across its scan) blocks until this row is
+	// visible. Reordering writePool ahead of Insert would reopen the race
+	// where gc classifies the just-written file as an orphan and deletes it.
 	if ierr := r.Insert(ctx, tx, pkg); ierr != nil {
 		if errors.Is(ierr, repo.ErrDuplicate) {
 			if cmd.SkipExisting {
@@ -270,6 +281,27 @@ func (cmd *AddCmd) processOne(
 				pkg.Distro, pkg.Suite, pkg.Component)
 		}
 		return "", "", "", fmt.Errorf("inserting %s: %w", pkg.Name, ierr)
+	}
+
+	// A non-replace add whose pool path already holds a byte-identical file
+	// is the delete -> re-add path: `delete` is DB-only, so the prior pool
+	// file survives as an orphan after its row is gone. Re-adopt it in place
+	// rather than failing with "already exists" — the row was just
+	// re-inserted, so after commit the file is DB-referenced again; on
+	// rollback it stays exactly the orphan it was before. Either outcome
+	// needs no pool action, so it is reported as a no-op (empty diskPath)
+	// and kept out of the caller's rollback ledger. A file present with
+	// *different* bytes is left to writePool, which still hard-errors so
+	// --replace stays the only way to clobber differing content.
+	if !cmd.Replace {
+		dest := filepath.Join(c.PublicDir, filepath.FromSlash(diskPath))
+		match, herr := destMatchesSHA256(dest, pkg.SHA256)
+		if herr != nil {
+			return "", "", "", fmt.Errorf("checking existing pool file %s: %w", diskPath, herr)
+		}
+		if match {
+			return "", "", "", nil
+		}
 	}
 
 	backup, werr := writePool(c.PublicDir, diskPath, srcPath, cmd.Replace)

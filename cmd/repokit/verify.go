@@ -6,51 +6,43 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/alkk/repokit/pkg/pool"
 	"github.com/alkk/repokit/pkg/repo"
 )
 
-// VerifyCmd checks pool files against the database and (optionally) garbage-
-// collects pool files that have no DB row. It never removes DB rows that point
-// at a missing pool file — that resolution requires a manual decision.
+// VerifyCmd checks pool files against the database: it rehashes every pool
+// file a row points at and reports hash mismatches, missing pool files, and
+// orphans (pool files with no DB row). It is strictly read-only — orphan
+// removal lives entirely in `repokit gc`, and it never removes DB rows that
+// point at a missing pool file (that resolution requires a manual decision).
 type VerifyCmd struct {
 	Distro DistroName `long:"distro" description:"limit verification to one distribution (plain like 'debian' or namespaced like 'customer/acme')"`
 	Suite  string     `long:"suite" description:"limit verification to one suite (requires --distro)"`
-	GC     bool       `long:"gc" description:"remove orphan pool files (files with no database row)"`
 }
 
 // Execute runs the verify subcommand. Exit code is exitOK when the scope is
-// clean (after any --gc removal), otherwise exitError.
+// clean (no mismatches, missing files, or orphans), otherwise exitError.
 func (cmd *VerifyCmd) Execute(c *Context) int {
 	report, err := cmd.run(c)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "verify: %v\n", err)
 		return exitError
 	}
-	if report.passed(cmd.GC) {
+	if report.passed() {
 		return exitOK
 	}
 	return exitError
 }
-
-// poolDirName is the literal "pool" segment that sits under each per-distro
-// public-tree root (i.e. <publicDir>/<distro>/pool/...). It is not a
-// top-level directory under <publicDir> either — every pool file lives
-// under a per-distro subdirectory.
-const poolDirName = "pool"
 
 // verifyReport accumulates issues found by a single verify run. Paths use
 // forward slashes and disk-relative form (<distro>/pool/...) across all
@@ -64,16 +56,11 @@ type verifyReport struct {
 	Orphans     []string
 }
 
-// passed reports whether the scope is acceptable. Orphans only count against a
-// run when --gc is absent, since --gc deletes them as part of the same call.
-func (r *verifyReport) passed(gc bool) bool {
-	if len(r.Mismatches) > 0 || len(r.MissingPool) > 0 {
-		return false
-	}
-	if !gc && len(r.Orphans) > 0 {
-		return false
-	}
-	return true
+// passed reports whether the scope is clean: no hash mismatches, no missing
+// pool files, and no orphans. verify is read-only, so an orphan is a finding
+// the operator resolves by running `repokit gc` — its presence fails the run.
+func (r *verifyReport) passed() bool {
+	return len(r.Mismatches) == 0 && len(r.MissingPool) == 0 && len(r.Orphans) == 0
 }
 
 func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
@@ -107,22 +94,7 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 	defer r.Close()
 
 	report := &verifyReport{}
-	if cmd.GC {
-		// Hold the SQLite writer lock for the entire scan-and-delete pass
-		// so a concurrent `add` cannot race the orphan walk: add writes
-		// its pool bytes inside its own writer-locked transaction but the
-		// row only becomes visible at commit, so a gc walk that ran with
-		// only a snapshot read could classify the in-flight pool file as
-		// an orphan and delete it before the row appeared. BEGIN IMMEDIATE
-		// serializes verify --gc against any other writer (add/delete) on
-		// this repo.
-		err = r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
-			return cmd.verifyAndGC(ctx, c.PublicDir, distros, c.Stderr, r, conn, report)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("gc pass: %w", err)
-		}
-	} else if err := cmd.verifyOnly(ctx, c.PublicDir, distros, c.Stderr, r, report); err != nil {
+	if err := cmd.verifyOnly(ctx, c.PublicDir, distros, c.Stderr, r, report); err != nil {
 		return nil, err
 	}
 
@@ -130,10 +102,11 @@ func (cmd *VerifyCmd) run(c *Context) (*verifyReport, error) {
 	return report, nil
 }
 
-// verifyOnly runs the no-gc path: hash the rows in scope, then scan for
-// orphans. Concurrent writers may add or delete rows during the walk;
-// without a lock the report is best-effort, which is acceptable when no
-// destructive action follows.
+// verifyOnly hashes the rows in scope, then scans for orphans. verify is
+// read-only: concurrent writers may add or delete rows during the walk, so
+// the report is best-effort. That is acceptable because no destructive action
+// follows — `repokit gc` is the command that acts on orphans, and it takes
+// the writer lock for itself.
 func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, distros []string, stderr io.Writer, r *repo.Repo, report *verifyReport) error {
 	rows, err := r.List(ctx, repo.Filter{Distro: string(cmd.Distro), Suite: cmd.Suite})
 	if err != nil {
@@ -144,29 +117,21 @@ func (cmd *VerifyCmd) verifyOnly(ctx context.Context, publicDir string, distros 
 	if err != nil {
 		return err
 	}
-	return cmd.scanOrphansForScope(publicDir, distros, known, report)
-}
-
-// verifyAndGC runs the same checks as verifyOnly but reads rows through
-// the writer-locked connection so the orphan set is computed against a
-// snapshot no concurrent writer can mutate, then deletes the orphans
-// before releasing the lock.
-func (cmd *VerifyCmd) verifyAndGC(
-	ctx context.Context, publicDir string, distros []string, stderr io.Writer, r *repo.Repo, conn *sql.Conn, report *verifyReport,
-) error {
-	rows, err := r.ListConn(ctx, conn, repo.Filter{Distro: string(cmd.Distro), Suite: cmd.Suite})
-	if err != nil {
-		return fmt.Errorf("listing rows: %w", err)
+	// scoped (--distro set) walks one per-distro pool subtree; unscoped
+	// iterates the configured distros from config.yaml — repokit never walks
+	// distros the operator has not declared, so unrelated top-level trees
+	// under the public dir are left untouched.
+	var orphans []string
+	if cmd.Distro != "" {
+		orphans, err = scanPoolForOrphans(publicDir, string(cmd.Distro), cmd.Suite, known)
+	} else {
+		orphans, err = scanPoolForOrphansAcrossDistros(publicDir, distros, known)
 	}
-	rows = filterRowsByConfiguredDistros(string(cmd.Distro), rows, distros, stderr)
-	known, err := hashAndIndex(publicDir, rows, report)
 	if err != nil {
 		return err
 	}
-	if err := cmd.scanOrphansForScope(publicDir, distros, known, report); err != nil {
-		return err
-	}
-	return removeOrphans(publicDir, report.Orphans, distros, stderr)
+	report.Orphans = orphans
+	return nil
 }
 
 // filterRowsByConfiguredDistros drops rows whose distro is not in distros and
@@ -201,23 +166,6 @@ func filterRowsByConfiguredDistros(scope string, rows []repo.Package, distros []
 	return out
 }
 
-// scanOrphansForScope dispatches the orphan walk for both the scoped
-// (--distro set) and unscoped paths. The unscoped path iterates the
-// configured distros from config.yaml — repokit never walks distros the
-// operator has not declared, so unrelated top-level trees under the
-// public dir are left untouched.
-func (cmd *VerifyCmd) scanOrphansForScope(
-	publicDir string,
-	distros []string,
-	known map[string]struct{},
-	report *verifyReport,
-) error {
-	if cmd.Distro != "" {
-		return scanOrphans(publicDir, string(cmd.Distro), cmd.Suite, known, report)
-	}
-	return scanOrphansAcrossDistros(publicDir, distros, known, report)
-}
-
 // hashAndIndex rehashes every row and returns a set of disk-relative paths
 // (<distro>/pool/...) that the orphan walk can diff against. Walks the rows
 // once so verifyOne and known share the same iteration.
@@ -230,18 +178,6 @@ func hashAndIndex(publicDir string, rows []repo.Package, report *verifyReport) (
 		}
 	}
 	return known, nil
-}
-
-// scanOrphansAcrossDistros walks <publicDir>/<distro>/pool for every distro
-// and records orphans into report. Used when verify runs unscoped — the union
-// of all per-distro pools is the search space.
-func scanOrphansAcrossDistros(publicDir string, distros []string, known map[string]struct{}, report *verifyReport) error {
-	for _, d := range distros {
-		if err := scanOrphans(publicDir, d, "", known, report); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // verifyOne rehashes a single pool file and records mismatches or missing
@@ -282,105 +218,6 @@ func hashEq(h hash.Hash, want string) bool {
 	return hex.EncodeToString(h.Sum(nil)) == want
 }
 
-// scanOrphans walks the per-distro pool subtree narrowed by suite and records
-// any regular file whose disk-relative path is not in the supplied DB set.
-// The walk is a no-op when the scoped directory does not exist (e.g. a distro
-// with no published files yet). distro must be non-empty; the unscoped case
-// is handled by the caller iterating over distros.
-func scanOrphans(publicDir, distro, suite string, known map[string]struct{}, report *verifyReport) error {
-	rel := scopePoolDir(distro, suite)
-	abs := filepath.Join(publicDir, filepath.FromSlash(rel))
-	if _, err := os.Stat(abs); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("stat %s: %w", rel, err)
-	}
-	walkErr := filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		// .tmp and .bak are transient artifacts of an in-flight or crashed
-		// pool write — see pool.Replace. Treating them as orphans would let
-		// --gc destroy the only recoverable copy after an interrupted
-		// Replace; they are cleaned up by the next successful Replace at
-		// the same path instead.
-		if strings.HasSuffix(d.Name(), ".tmp") || strings.HasSuffix(d.Name(), ".bak") {
-			return nil
-		}
-		relPath, rerr := filepath.Rel(publicDir, p)
-		if rerr != nil {
-			return rerr //nolint:wrapcheck // surfaced verbatim by the outer wrap
-		}
-		key := filepath.ToSlash(relPath)
-		if _, ok := known[key]; ok {
-			return nil
-		}
-		report.Orphans = append(report.Orphans, key)
-		return nil
-	})
-	if walkErr != nil {
-		return fmt.Errorf("walking %s: %w", rel, walkErr)
-	}
-	sort.Strings(report.Orphans)
-	return nil
-}
-
-// scopePoolDir returns the disk-relative subtree to walk for orphan detection
-// inside a single distro. The unscoped (no distro) case has no single root —
-// callers iterate over distros and call this per-distro.
-func scopePoolDir(distro, suite string) string {
-	if suite != "" {
-		return distro + "/" + poolDirName + "/" + suite
-	}
-	return distro + "/" + poolDirName
-}
-
-// removeOrphans deletes the listed pool files and prunes the now-empty
-// ancestor directories up to (but not including) <publicDir>/<distro>/pool.
-// pool.Delete is idempotent so a second call would be a no-op; we still
-// surface real I/O errors. Prune errors are non-fatal (the file is gone,
-// the DB row is gone, a leftover empty dir is cosmetic) and are warned to
-// stderr.
-func removeOrphans(publicDir string, orphans, distros []string, stderr io.Writer) error {
-	for _, p := range orphans {
-		if err := pool.Delete(publicDir, p); err != nil {
-			return fmt.Errorf("removing orphan %s: %w", p, err)
-		}
-		distro := matchOrphanDistro(p, distros)
-		if distro == "" {
-			continue
-		}
-		if err := pool.PruneEmptyParents(publicDir, distro, p); err != nil {
-			fmt.Fprintf(stderr, "prune: %v\n", err)
-		}
-	}
-	return nil
-}
-
-// matchOrphanDistro returns the configured distro whose <distro>/pool/
-// prefix matches p, or "" if none does. Picks the longest match so a plain
-// "customer" never shadows a namespaced "customer/acme" — required because
-// namespaced distros (`customer/acme`) contain a `/` and a naive
-// strings.Cut on the first `/` would mis-anchor the prune stop boundary at
-// <publicDir>/customer/pool, potentially letting the climb remove
-// <publicDir>/customer/acme/pool itself. The config loader already rejects
-// a plain-prefix collision like [customer, customer/acme]; the longest-
-// match logic here is defense in depth.
-func matchOrphanDistro(p string, distros []string) string {
-	best := ""
-	for _, d := range distros {
-		prefix := d + "/" + poolDirName + "/"
-		if strings.HasPrefix(p, prefix) && len(d) > len(best) {
-			best = d
-		}
-	}
-	return best
-}
-
 // printReport writes one line per finding plus a final status. Findings are
 // always printed (even under --quiet) so a verify failure stays diagnosable
 // from a script.
@@ -392,16 +229,12 @@ func (cmd *VerifyCmd) printReport(c *Context, report *verifyReport) {
 		fmt.Fprintf(c.Stdout, "missing %s\n", p)
 	}
 	for _, p := range report.Orphans {
-		if cmd.GC {
-			fmt.Fprintf(c.Stdout, "orphan %s (removed)\n", p)
-			continue
-		}
 		fmt.Fprintf(c.Stdout, "orphan %s\n", p)
 	}
 	if c.Quiet {
 		return
 	}
-	if report.passed(cmd.GC) {
+	if report.passed() {
 		fmt.Fprintln(c.Stdout, "verify: ok")
 		return
 	}

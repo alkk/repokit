@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/alkk/repokit/pkg/pool"
 	"github.com/alkk/repokit/pkg/repo"
 )
 
-// DeleteCmd removes packages from a suite. It mutates the database and pool
-// only; the dists/ tree is rebuilt by a subsequent `repokit publish` run.
+// DeleteCmd removes packages from a suite. It mutates the database only; the
+// pool files it orphans are reaped by `repokit gc`, and the dists/ tree is
+// rebuilt by a subsequent `repokit publish` run.
 //
 // At least one of --name or --sha256 is required to prevent whole-suite
 // wipes. Deleting every version of a named package additionally requires
@@ -113,50 +113,24 @@ func (cmd *DeleteCmd) runDryRun(ctx context.Context, c *Context, r *repo.Repo, f
 	return nil
 }
 
-// runDelete removes the DB rows and their pool files under a single writer
-// lock. The lock spans both phases so a concurrent `add` (which writes its
-// pool bytes inside its own writer-locked transaction) cannot insert a row
-// referencing one of these filenames between our DB commit and the pool
-// unlink — without serialization, the pool.Delete loop would silently
-// remove the freshly written bytes belonging to that committed row. A
-// crash between the DB commit and a still-pending pool.Delete leaves only
-// orphans (pool files with no DB row), which `verify --gc` recovers; the
-// reverse order would leave DB rows pointing at missing files, which is
-// harder to repair, so partial pool failures keep the DB committed and
-// surface the unlink error to the operator.
+// runDelete removes the matching DB rows and nothing else. The pool files
+// the rows referenced are left on disk as orphans (the dists/ indexes still
+// point at files that still exist until the next publish); `repokit gc`
+// reaps them later. The writer lock is a DeleteConn plumbing requirement —
+// DeleteConn must run on a writer-locked connection — not an active
+// serialization choice; SQLite already serializes writers on its own.
 func (cmd *DeleteCmd) runDelete(ctx context.Context, c *Context, r *repo.Repo, filter repo.Filter) error {
-	var (
-		deleted    []repo.Package
-		poolErr    error
-		poolErrIdx int
-	)
+	var deleted []repo.Package
 	lockErr := r.WithWriterLock(ctx, func(ctx context.Context, conn *sql.Conn) error {
 		rows, derr := r.DeleteConn(ctx, conn, filter)
 		if derr != nil {
 			return fmt.Errorf("deleting rows: %w", derr)
 		}
 		deleted = rows
-		for i, p := range deleted {
-			rel := pool.DiskPath(p.Distro, p.Filename)
-			if err := pool.Delete(c.PublicDir, rel); err != nil {
-				poolErr = err
-				poolErrIdx = i
-				//nolint:nilerr // intentional: keep the DB delete committed so partial pool failures leave only orphans (recoverable via verify --gc), not rows pointing at missing files
-				return nil
-			}
-			if err := pool.PruneEmptyParents(c.PublicDir, p.Distro, rel); err != nil {
-				fmt.Fprintf(c.Stderr, "prune: %v\n", err)
-			}
-		}
 		return nil
 	})
 	if lockErr != nil {
 		return fmt.Errorf("delete transaction: %w", lockErr)
-	}
-	if poolErr != nil {
-		cmd.report(c, deleted[:poolErrIdx], false)
-		return fmt.Errorf("removing pool file %s (%d of %d removed before failure): %w",
-			deleted[poolErrIdx].Filename, poolErrIdx, len(deleted), poolErr)
 	}
 
 	cmd.report(c, deleted, false)
@@ -181,6 +155,8 @@ func (cmd *DeleteCmd) report(c *Context, rows []repo.Package, dryRun bool) {
 		fmt.Fprintf(c.Stdout, "would delete %d package(s) (dry run, no changes made)\n", len(rows))
 		return
 	}
-	fmt.Fprintf(c.Stdout, "deleted %d package(s) — run 'repokit publish --distro %s --suite %s' to update indexes\n",
+	fmt.Fprintf(c.Stdout,
+		"deleted %d package(s) — run 'repokit publish --distro %s --suite %s' to update indexes;"+
+			" orphan pool files removed via 'repokit gc'\n",
 		len(rows), string(cmd.Distro), cmd.Suite)
 }

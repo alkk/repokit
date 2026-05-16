@@ -2,15 +2,10 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/alkk/repokit/pkg/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,8 +65,12 @@ func TestVerifyMissingPoolFileDetected(t *testing.T) {
 	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "missing debian/pool/bookworm/main/h/hello-gz/hello-gz_1.0_amd64.deb")
 	assert.Contains(t, stdout, "1 missing")
+	assert.Equal(t, 1, rowCount(t, tmpState), "verify never removes rows for missing pool files")
 }
 
+// TestVerifyOrphanDetected pins the post-cutover contract: verify is
+// read-only, so an orphan is reported and the run exits non-zero (the
+// operator's signal to run `repokit gc`); the file is never touched.
 func TestVerifyOrphanDetected(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -86,158 +85,24 @@ func TestVerifyOrphanDetected(t *testing.T) {
 	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb")
+	assert.NotContains(t, stdout, "(removed)", "verify must never report orphans as removed")
 	assert.Contains(t, stdout, "1 orphan(s)")
 
-	assert.FileExists(t, orphan, "orphan must remain on disk without --gc")
+	assert.FileExists(t, orphan, "verify is read-only and must leave orphans on disk")
 }
 
-func TestVerifyGCRemovesOnlyOrphan(t *testing.T) {
+// TestVerifyGCFlagRejected guards the breaking removal: `verify --gc` no
+// longer exists, so go-flags must reject it as an unknown flag (exitUsage)
+// rather than silently doing nothing.
+func TestVerifyGCFlagRejected(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
 	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
 
-	legit := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
-		"hello-gz_1.0_amd64.deb")
-	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost",
-		"ghost_1.0_amd64.deb")
-	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
-	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
-
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "orphan debian/pool/bookworm/main/g/ghost/ghost_1.0_amd64.deb (removed)")
-	assert.Contains(t, stdout, "verify: ok")
-
-	assert.NoFileExists(t, orphan, "--gc must remove orphan")
-	assert.FileExists(t, legit, "--gc must leave legit pool files in place")
-	assert.Equal(t, 1, rowCount(t, tmpState), "--gc must not touch DB rows")
-
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g", "ghost"),
-		"emptied orphan source dir must be pruned after --gc removes its only file")
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "g"),
-		"emptied letter shard must be pruned when its only source dir is gone")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz"),
-		"sibling source dir under a different letter shard must remain")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm"),
-		"suite dir must remain while a sibling letter shard is still occupied")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool"),
-		"per-distro pool root must never be pruned (stop boundary)")
-}
-
-// TestVerifyGCKeepsSiblingTreeIntact guards against the prune helper
-// climbing past the first still-occupied ancestor. An orphan and a
-// legitimate file under the same letter shard (different source dirs) must
-// leave the shared shard dir intact after --gc removes the orphan.
-func TestVerifyGCKeepsSiblingTreeIntact(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
-
-	orphan := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "ghost-h",
-		"ghost-h_1.0_amd64.deb")
-	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
-	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
-
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "ghost-h_1.0_amd64.deb (removed)")
-
-	assert.NoFileExists(t, orphan)
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "ghost-h"),
-		"emptied orphan source dir must be pruned")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz"),
-		"sibling source dir under the same letter shard must remain")
-	assert.DirExists(t, filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h"),
-		"shared letter shard must remain while a sibling source dir is still occupied")
-}
-
-// TestVerifyGCPrunesNamespacedDistro guards the namespaced-distro arm of the
-// orphan prune path: `customer/acme/pool/...` must anchor its stop boundary
-// at <publicDir>/customer/acme/pool, NOT at <publicDir>/customer/pool. A
-// naive first-slash split (strings.Cut on `/`) would mis-anchor and could
-// remove customer/acme/pool/ itself.
-func TestVerifyGCPrunesNamespacedDistro(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	appendTestDistros(t, tmpState, "customer/acme")
-
-	orphan := filepath.Join(tmpPublic, "customer", "acme", "pool", "stable", "main", "g", "ghost",
-		"ghost_1.0_amd64.deb")
-	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
-	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
-
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "orphan customer/acme/pool/stable/main/g/ghost/ghost_1.0_amd64.deb (removed)")
-
-	assert.NoFileExists(t, orphan)
-	assert.NoDirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool", "stable"),
-		"emptied suite subtree under namespaced distro must be pruned")
-	assert.DirExists(t, filepath.Join(tmpPublic, "customer", "acme", "pool"),
-		"namespaced pool root must be preserved (stop boundary at customer/acme/pool, not customer/pool)")
-	assert.NotContains(t, stderr, "prune:", "no prune warning expected on the happy path")
-}
-
-// TestMatchOrphanDistro is a focused unit test for the longest-prefix
-// matcher used by removeOrphans. Plain prefixes must not shadow namespaced
-// ones; an unmatched path returns "" so the prune is skipped.
-func TestMatchOrphanDistro(t *testing.T) {
-	distros := []string{"debian", "customer", "customer/acme"}
-	cases := []struct {
-		name string
-		path string
-		want string
-	}{
-		{
-			name: "plain distro",
-			path: "debian/pool/bookworm/main/h/hello/hello_1.0_amd64.deb",
-			want: "debian",
-		},
-		{
-			name: "namespaced distro wins over plain prefix",
-			path: "customer/acme/pool/stable/main/f/foo/foo_1.0_amd64.deb",
-			want: "customer/acme",
-		},
-		{
-			name: "plain prefix matches when path is not namespaced",
-			path: "customer/pool/stable/main/f/foo/foo_1.0_amd64.deb",
-			want: "customer",
-		},
-		{
-			name: "no match returns empty",
-			path: "raspbian/pool/bullseye/main/f/foo/foo_1.0_armhf.deb",
-			want: "",
-		},
-		{
-			name: "missing /pool/ segment returns empty",
-			path: "debian/something-else/file.deb",
-			want: "",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, matchOrphanDistro(tc.path, distros))
-		})
-	}
-}
-
-func TestVerifyGCDoesNotRemoveRowsForMissingPoolFiles(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
-
-	target := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
-		"hello-gz_1.0_amd64.deb")
-	require.NoError(t, os.Remove(target))
-
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitError, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "missing")
-	assert.Equal(t, 1, rowCount(t, tmpState), "rows for missing pool files must survive --gc")
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	require.Equal(t, exitUsage, code)
+	assert.Contains(t, stderr, "unknown flag")
+	assert.Contains(t, stderr, "gc")
 }
 
 func TestVerifyScopedToSuiteIgnoresOtherSuites(t *testing.T) {
@@ -280,9 +145,9 @@ func TestVerifyEmptyRepoPasses(t *testing.T) {
 }
 
 // TestVerifyScopedToDistroCoversAllSuites guards the middle branch of
-// scopePoolDir (distro set, suite empty). Without it, a regression that
-// collapsed the distro-only case to either the suite-scoped or root path would
-// silently include or exclude the wrong subtree of orphans.
+// scopePoolDir (distro set, suite empty): distro-scoped verify must report
+// orphans from every suite under that distro and never reach into another
+// distro. Verify is read-only, so every planted file survives.
 func TestVerifyScopedToDistroCoversAllSuites(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -303,103 +168,21 @@ func TestVerifyScopedToDistroCoversAllSuites(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(otherDistroOrphan), 0o755))
 	require.NoError(t, os.WriteFile(otherDistroOrphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "debian", "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "debian")
+	require.Equal(t, exitError, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "ghost-book", "distro-scoped verify must cover bookworm")
 	assert.Contains(t, stdout, "ghost-bull", "distro-scoped verify must cover bullseye")
 	assert.NotContains(t, stdout, "ghost-noble", "verify --distro debian must not touch ubuntu")
+	assert.Contains(t, stdout, "2 orphan(s)")
 
-	assert.NoFileExists(t, bookOrphan, "--gc must remove in-scope orphan from bookworm")
-	assert.NoFileExists(t, bullOrphan, "--gc must remove in-scope orphan from bullseye")
-	assert.FileExists(t, otherDistroOrphan, "--gc must leave out-of-scope orphan in another distro")
+	assert.FileExists(t, bookOrphan, "verify must not remove in-scope orphans")
+	assert.FileExists(t, bullOrphan, "verify must not remove in-scope orphans")
+	assert.FileExists(t, otherDistroOrphan, "verify must not touch another distro's tree")
 }
 
-// TestVerifyGCPreservesPoolWriteArtifacts guards against verify --gc destroying
-// the recoverable copy after an interrupted pool.Replace. A crashed Replace can
-// leave dest.bak (old bytes) and dest.tmp (new bytes) on disk while the DB row
-// still references dest; classifying these as orphans would turn a recoverable
-// state into permanent data loss.
-func TestVerifyGCPreservesPoolWriteArtifacts(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
-
-	dest := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
-		"hello-gz_1.0_amd64.deb")
-	require.NoError(t, os.WriteFile(dest+".bak", []byte("old bytes"), 0o644))
-	require.NoError(t, os.WriteFile(dest+".tmp", []byte("new bytes"), 0o644))
-
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-	assert.NotContains(t, stdout, ".bak", "pool-write .bak must not be reported as orphan")
-	assert.NotContains(t, stdout, ".tmp", "pool-write .tmp must not be reported as orphan")
-	assert.FileExists(t, dest+".bak", "--gc must preserve .bak so an interrupted Replace stays recoverable")
-	assert.FileExists(t, dest+".tmp", "--gc must preserve .tmp so an interrupted Replace stays recoverable")
-}
-
-// TestVerifyGCSerializesWithConcurrentWriter guards the race where an
-// in-flight `add` writes its pool bytes inside its own writer transaction
-// but verify --gc, computing orphans against committed rows only, deletes
-// the file before that transaction commits. Holding a writer lock from a
-// separate connection (mimicking add's INSERT-to-COMMIT window) must block
-// verify --gc until release.
-func TestVerifyGCSerializesWithConcurrentWriter(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
-	initRepoForTest(t, tmpState)
-	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
-
-	r, err := repo.Open(context.Background(), filepath.Join(tmpState, dbFilename))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = r.Close() })
-
-	holderReady := make(chan struct{})
-	releaseHolder := make(chan struct{})
-
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_ = r.WithWriterLock(context.Background(), func(ctx context.Context, conn *sql.Conn) error {
-			close(holderReady)
-			<-releaseHolder
-			return nil
-		})
-	})
-
-	<-holderReady
-
-	verifyDone := make(chan struct {
-		code   int
-		stderr string
-	}, 1)
-	go func() {
-		code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-		verifyDone <- struct {
-			code   int
-			stderr string
-		}{code, stderr}
-	}()
-
-	select {
-	case res := <-verifyDone:
-		t.Fatalf("verify --gc completed while writer lock was held: code=%d stderr=%s", res.code, res.stderr)
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	close(releaseHolder)
-	wg.Wait()
-
-	select {
-	case res := <-verifyDone:
-		require.Equal(t, exitOK, res.code, "stderr: %s", res.stderr)
-	case <-time.After(5 * time.Second):
-		t.Fatal("verify --gc did not finish after writer lock release")
-	}
-}
-
-// TestVerifyUnscopedAcrossDistrosFindsOrphans guards the multi-distro unscoped
-// path: with no --distro flag, verify must enumerate every distro and walk
-// each per-distro pool tree, reporting orphans from all of them.
+// TestVerifyUnscopedAcrossDistrosFindsOrphans guards the multi-distro
+// unscoped path: with no --distro flag, verify must enumerate every
+// configured distro and report orphans from all of them.
 func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -423,20 +206,18 @@ func TestVerifyUnscopedAcrossDistrosFindsOrphans(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte("orphan"), 0o644))
 	}
 
-	code, out, errOut := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", errOut)
-	assert.Contains(t, out, "orphan debian/pool/bookworm/main/g/ghost/ghost-deb_1.0_amd64.deb (removed)")
-	assert.Contains(t, out, "orphan ubuntu/pool/noble/main/g/ghost/ghost-ubu_1.0_amd64.deb (removed)")
-	assert.NoFileExists(t, debianOrphan)
-	assert.NoFileExists(t, ubuntuOrphan)
+	code, out, errOut := runVerify(t, tmpState, tmpPublic)
+	require.Equal(t, exitError, code, "stderr: %s", errOut)
+	assert.Contains(t, out, "orphan debian/pool/bookworm/main/g/ghost/ghost-deb_1.0_amd64.deb")
+	assert.Contains(t, out, "orphan ubuntu/pool/noble/main/g/ghost/ghost-ubu_1.0_amd64.deb")
+	assert.FileExists(t, debianOrphan, "verify is read-only")
+	assert.FileExists(t, ubuntuOrphan, "verify is read-only")
 }
 
 // TestVerifyUnscopedFindsOrphansInDBEmptyDistro guards against the
 // regression where unscoped verify silently misses orphan files in a
-// configured distro that has no rows at all (e.g. after a crashed add or
-// a delete pass that removed the last row but failed to clean up the
-// pool file). Every distro listed in config.distros is walked even when
-// the DB has no rows for it.
+// configured distro that has no rows at all. Every distro listed in
+// config.distros is walked even when the DB has no rows for it.
 func TestVerifyUnscopedFindsOrphansInDBEmptyDistro(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -447,10 +228,10 @@ func TestVerifyUnscopedFindsOrphansInDBEmptyDistro(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
-	require.Equal(t, exitOK, code, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "orphan ubuntu/pool/noble/main/g/ghost/ghost_1.0_amd64.deb (removed)")
-	assert.NoFileExists(t, orphan, "--gc must reclaim orphans even when the distro has no DB rows")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
+	require.Equal(t, exitError, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "orphan ubuntu/pool/noble/main/g/ghost/ghost_1.0_amd64.deb")
+	assert.FileExists(t, orphan, "verify must report but never reclaim orphans")
 }
 
 func TestVerifyRejectsUnsafeScope(t *testing.T) {
@@ -462,16 +243,15 @@ func TestVerifyRejectsUnsafeScope(t *testing.T) {
 	sentinel := filepath.Join(tmpPublic, "sentinel.txt")
 	require.NoError(t, os.WriteFile(sentinel, []byte("must survive"), 0o644))
 
-	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc", "--distro", "..")
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "..")
 	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "--distro")
-	assert.FileExists(t, sentinel, "sentinel outside pool/ must not be touched by verify --gc")
+	assert.FileExists(t, sentinel, "sentinel outside pool/ must not be touched by verify")
 }
 
 // TestVerifyDoesNotTouchStateDir is a focused regression check that verify's
-// pool walks read from ctx.PublicDir, not ctx.Root: if a same-named decoy
-// orphan file is planted under tmpState's mirrored layout, --gc must not see
-// or remove it because state-dir contents are outside verify's search space.
+// pool walk reads ctx.PublicDir, not ctx.Root: a same-named decoy orphan
+// planted under the state-dir mirror layout must be invisible to verify.
 func TestVerifyDoesNotTouchStateDir(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -486,12 +266,12 @@ func TestVerifyDoesNotTouchStateDir(t *testing.T) {
 	statePre, err := os.ReadDir(tmpState)
 	require.NoError(t, err)
 
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "ghost", "verify must not visit pool trees inside the state dir")
 
-	assert.FileExists(t, stateDecoy, "verify --gc must not unlink anything under the state dir")
+	assert.FileExists(t, stateDecoy, "verify must not visit anything under the state dir")
 	assert.FileExists(t, filepath.Join(tmpState, configFilename), "config.yaml must remain untouched")
 	assert.FileExists(t, filepath.Join(tmpState, dbFilename), "repo.db must remain untouched")
 
@@ -500,13 +280,11 @@ func TestVerifyDoesNotTouchStateDir(t *testing.T) {
 	assert.Len(t, statePost, len(statePre), "state dir top-level entry count must not change")
 }
 
-// TestVerifyGCLeavesUnconfiguredDistroAlone is the central regression test
-// for the explicit-distros bug fix: a public dir holding an unrelated
-// top-level tree (e.g. raspbian/pool/... managed by another tool) must be
-// invisible to verify --gc when raspbian is not in config.distros.
-// Before the fix, the disk-discovery branch of unionWithDiskDistros would
-// walk the tree, classify every file as an orphan, and delete it.
-func TestVerifyGCLeavesUnconfiguredDistroAlone(t *testing.T) {
+// TestVerifyLeavesUnconfiguredDistroAlone is the central regression test for
+// the explicit-distros gating: a public dir holding an unrelated top-level
+// tree (e.g. raspbian/pool/... managed by another tool) must be invisible to
+// verify when raspbian is not in config.distros.
+func TestVerifyLeavesUnconfiguredDistroAlone(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
 	initRepoForTest(t, tmpState)
@@ -517,22 +295,19 @@ func TestVerifyGCLeavesUnconfiguredDistroAlone(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(foreign), 0o755))
 	require.NoError(t, os.WriteFile(foreign, []byte("not repokit's"), 0o644))
 
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.NotContains(t, stdout, "raspbian", "verify must never walk unconfigured trees")
 
-	assert.FileExists(t, foreign, "verify --gc must not touch unconfigured distros under publicDir")
+	assert.FileExists(t, foreign, "verify must not touch unconfigured distros under publicDir")
 	body, err := os.ReadFile(foreign)
 	require.NoError(t, err)
 	assert.Equal(t, "not repokit's", string(body), "file contents must be untouched")
 }
 
-// TestVerifyUnconfiguredDistroFlagAborts confirms a --distro value that
-// is not in config.distros aborts the run before any pool walk happens.
-// We plant a known-orphan inside a configured distro: if the run had
-// proceeded past the gate, --gc would have deleted it; the assertion that
-// the file survives proves the early abort.
+// TestVerifyUnconfiguredDistroFlagAborts confirms a --distro value that is
+// not in config.distros aborts the run before any pool walk happens.
 func TestVerifyUnconfiguredDistroFlagAborts(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -544,18 +319,16 @@ func TestVerifyUnconfiguredDistroFlagAborts(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
-	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc", "--distro", "raspbian")
+	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--distro", "raspbian")
 	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "raspbian")
 	assert.Contains(t, stderr, "config.distros")
 	assert.FileExists(t, orphan, "verify must abort before any pool walk when --distro is unconfigured")
 }
 
-// TestVerifyUnscopedRejectsEmptyDistros guards the hard-cutover promise:
-// an existing repo whose config.yaml has no distros: block (or an empty
-// list) must fail with a clear error when run unscoped, not silently
-// succeed with "verify: ok". The scoped --distro path is already covered
-// by requireConfiguredDistro.
+// TestVerifyUnscopedRejectsEmptyDistros guards the hard-cutover promise: an
+// existing repo whose config.yaml has no distros: block must fail with a
+// clear error when run unscoped, not silently succeed with "verify: ok".
 func TestVerifyUnscopedRejectsEmptyDistros(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -568,17 +341,16 @@ func TestVerifyUnscopedRejectsEmptyDistros(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(orphan), 0o755))
 	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0o644))
 
-	code, _, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	code, _, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, exitError, code)
 	assert.Contains(t, stderr, "config.distros is empty")
-	assert.FileExists(t, orphan, "verify --gc must abort before any pool walk when config.distros is empty")
+	assert.FileExists(t, orphan, "verify must abort before any pool walk when config.distros is empty")
 }
 
 // TestVerifyUnscopedSkipsRowsForUnconfiguredDistro guards the verify
-// counterpart to publish's belt-and-braces filter: if a DB row exists for
-// a distro that was later removed from config.distros, verify must skip
-// the row (with a stderr warning) rather than open files under an
-// unconfigured tree.
+// counterpart to publish's belt-and-braces filter: if a DB row exists for a
+// distro that was later removed from config.distros, verify must skip the row
+// (with a stderr warning) rather than open files under an unconfigured tree.
 func TestVerifyUnscopedSkipsRowsForUnconfiguredDistro(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
@@ -593,7 +365,7 @@ func TestVerifyUnscopedSkipsRowsForUnconfiguredDistro(t *testing.T) {
 	bodyBefore, err := os.ReadFile(raspbianPool)
 	require.NoError(t, err)
 
-	code, stdout, stderr := runVerify(t, tmpState, tmpPublic, "--gc")
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
 	require.Equal(t, exitOK, code, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "verify: ok")
 	assert.Contains(t, stderr, `"raspbian"`,
@@ -608,10 +380,35 @@ func TestVerifyUnscopedSkipsRowsForUnconfiguredDistro(t *testing.T) {
 	assert.Equal(t, bodyBefore, bodyAfter, "raspbian pool file contents must be unchanged")
 }
 
-// TestVerifyAcceptsNamespacedDistro covers the Task 3 repointing of verify's
-// --distro validator. With distros: [customer/acme] declared and a matching
-// row in the DB, `verify --distro customer/acme` must pass validateDistroScope
-// and requireConfiguredDistro, then check the namespaced pool file.
+// TestVerifyDoesNotReportPoolWriteArtifactsAsOrphans guards against verify
+// flagging the recoverable copies left by an interrupted pool.Replace. A
+// crashed Replace can leave dest.bak (old bytes) and dest.tmp (new bytes) on
+// disk while the DB row still references dest; reporting these as orphans
+// would mislead the operator into gc-ing a recoverable state.
+func TestVerifyDoesNotReportPoolWriteArtifactsAsOrphans(t *testing.T) {
+	tmpState := t.TempDir()
+	tmpPublic := t.TempDir()
+	initRepoForTest(t, tmpState)
+	addFixtureForTest(t, tmpState, tmpPublic, "bookworm", "hello-gz_1.0_amd64.deb")
+
+	dest := filepath.Join(tmpPublic, "debian", "pool", "bookworm", "main", "h", "hello-gz",
+		"hello-gz_1.0_amd64.deb")
+	require.NoError(t, os.WriteFile(dest+".bak", []byte("old bytes"), 0o644))
+	require.NoError(t, os.WriteFile(dest+".tmp", []byte("new bytes"), 0o644))
+
+	code, stdout, stderr := runVerify(t, tmpState, tmpPublic)
+	require.Equal(t, exitOK, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "verify: ok")
+	assert.NotContains(t, stdout, ".bak", "pool-write .bak must not be reported as orphan")
+	assert.NotContains(t, stdout, ".tmp", "pool-write .tmp must not be reported as orphan")
+	assert.FileExists(t, dest+".bak", "verify must preserve .bak (it is read-only)")
+	assert.FileExists(t, dest+".tmp", "verify must preserve .tmp (it is read-only)")
+}
+
+// TestVerifyAcceptsNamespacedDistro covers the namespaced --distro validator:
+// with distros: [customer/acme] declared and a matching row in the DB,
+// `verify --distro customer/acme` must pass validateDistroScope and
+// requireConfiguredDistro, then check the namespaced pool file.
 func TestVerifyAcceptsNamespacedDistro(t *testing.T) {
 	tmpState := t.TempDir()
 	tmpPublic := t.TempDir()
