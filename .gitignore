@@ -1,6 +1,9 @@
-*.exe
 .bin/
+.gclcache/
+.gocache/
+.gopath/
 dist/
-coverage*.out
-*.test
+*.exe
 *.out
+*.test
+coverage*.out
