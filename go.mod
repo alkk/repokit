@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb
 	github.com/jessevdk/go-flags v1.6.1
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.19.0
 	github.com/stretchr/testify v1.11.1
 	github.com/ulikunitz/xz v0.5.15
 	gopkg.in/yaml.v3 v3.0.1
