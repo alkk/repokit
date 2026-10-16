@@ -84,6 +84,12 @@ Today `validateDistroSegment` only allows `[a-zA-Z0-9-]`, so `7.x` is rejected.
 
 TDD: add the failing cases first, then relax the validator.
 
+## Tandem
+
+| Task | Writer | Reviewer |
+|---|---|---|
+| 1 | claude | codex |
+
 ## Implementation Steps
 
 ### Task 1: Accept dotted distro segments
@@ -130,7 +136,7 @@ Layers: config validation (`pkg/config`), CLI integration test, user docs.
   `distros` row of the config table). It should state the widened alphabet
   plus the no-leading-`.`, no-trailing-`.` and no-`..` rules.
 - [x] gate: `make test` and `make lint` pass
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
