@@ -64,8 +64,7 @@ func runGPG(ctx context.Context, keyID, releasePath, outputPath string, extraFla
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
+		if _, ok := errors.AsType[*exec.Error](err); ok {
 			return fmt.Errorf("running %s: %w", gpgBinary, err)
 		}
 		msg := bytes.TrimSpace(stderr.Bytes())
