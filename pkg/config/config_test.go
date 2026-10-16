@@ -286,6 +286,33 @@ func TestLoad(t *testing.T) {
 		assert.Contains(t, err.Error(), "ubuntu/jammy")
 		assert.Contains(t, err.Error(), "ubuntu")
 	})
+
+	t.Run("dotted namespaced distro with suite override", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "dotted.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("signing_key: KEY\n"+
+			"distros:\n  - 7.x/debian\n  - debian\n"+
+			"suites:\n  7.x/debian/trixie:\n    label: NetXMS 7.x\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"7.x/debian", "debian"}, c.Distros)
+		assert.Equal(t, SuiteConfig{
+			Origin:      "7.x/debian",
+			Label:       "NetXMS 7.x",
+			Suite:       "trixie",
+			Codename:    "trixie",
+			Description: "7.x/debian trixie",
+		}, c.Suites["7.x/debian/trixie"])
+	})
+
+	t.Run("unquoted dotted plain distro stays a string", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "float.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("signing_key: KEY\ndistros:\n  - 7.10\n"), 0o600))
+
+		c, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"7.10"}, c.Distros)
+	})
 }
 
 func TestValidateDistroName(t *testing.T) {
@@ -301,6 +328,18 @@ func TestValidateDistroName(t *testing.T) {
 		{"uppercase allowed", "Debian", false},
 		{"namespaced", "customer/acme", false},
 		{"namespaced both with hyphen", "customer-1/acme-2", false},
+		{"dotted plain", "7.x", false},
+		{"dotted plain two digits", "7.10", false},
+		{"dotted namespace", "7.x/debian", false},
+		{"dotted right segment", "devel/7.0", false},
+		{"leading dot", ".x", true},
+		{"trailing dot", "7.", true},
+		{"leading dot namespace", ".hidden/debian", true},
+		{"dotted namespace dot right", "7.x/.", true},
+		{"dotted namespace dotdot right", "7.x/..", true},
+		{"trailing dot right", "debian/7.", true},
+		{"double dot inside", "7..x", true},
+		{"double dot inside right", "7.x/de..bian", true},
 		{"leading hyphen", "-debian", true},
 		{"empty", "", true},
 		{"contains space", "de bian", true},

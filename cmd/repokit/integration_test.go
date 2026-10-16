@@ -400,99 +400,136 @@ func TestIntegration_CrossDistroSameSuite(t *testing.T) {
 }
 
 // TestIntegration_NamespacedDistro exercises the full namespaced-distro flow
-// end-to-end: init with a single `customer/acme` distro, add one .deb, then run
-// an UNSCOPED publish so the dbScopes path (publish.go:515) is what discovers
-// the namespaced scope. Without the validateDistroScope repointing from Task 3,
-// dbScopes would silently filter the customer/acme row and publish would emit
-// nothing — so the unscoped variant is the only one that exercises that fix.
+// end-to-end for both a plain-letter namespace (`customer/acme`) and a dotted
+// version namespace (`7.x/debian`): init with the single distro, add one .deb,
+// then run an UNSCOPED publish so the dbScopes path (publish.go:515) is what
+// discovers the namespaced scope. Without the validateDistroScope repointing
+// from Task 3, dbScopes would silently filter the namespaced row and publish
+// would emit nothing — so the unscoped variant is the only one that exercises
+// that fix.
 //
 // Asserts the on-disk layout, all five Release header defaults from
 // defaultSuite (Origin/Label/Suite/Codename/Description), apt-relative
-// Filename in Packages, and that check exits 0. Also asserts the negative
-// case where add against an unconfigured namespaced distro is rejected by
-// requireConfiguredDistro (the scope validator accepts foo/bar but it is
-// absent from config.distros).
+// Filename in Packages, and that check exits 0. It then deletes the only
+// package and re-publishes unscoped, which leaves the filesystemScopes half of
+// allScopes as the only discovery source, and finally runs gc to reap the
+// orphaned pool file under the namespaced pool. Also asserts, once, the
+// negative case where add against an unconfigured namespaced distro is
+// rejected by requireConfiguredDistro (the scope validator accepts foo/bar but
+// it is absent from config.distros).
 func TestIntegration_NamespacedDistro(t *testing.T) {
-	tmpState := t.TempDir()
-	tmpPublic := t.TempDir()
 	deb := fixtureDeb(t, "hello-gz_1.0_amd64.deb")
 
-	runCmd := func(name string, args ...string) {
-		t.Helper()
-		var stdout, stderr bytes.Buffer
-		full := append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...)
-		code := run(full, &stdout, &stderr, "test-rev")
-		require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
+	for _, distro := range []string{"customer/acme", "7.x/debian"} {
+		t.Run(distro, func(t *testing.T) {
+			tmpState := t.TempDir()
+			tmpPublic := t.TempDir()
+
+			runCmd := func(name string, args ...string) {
+				t.Helper()
+				var stdout, stderr bytes.Buffer
+				full := append([]string{"--repo", tmpState, "--public", tmpPublic, name}, args...)
+				code := run(full, &stdout, &stderr, "test-rev")
+				require.Equalf(t, exitOK, code, "%s failed: %s", name, stderr.String())
+			}
+
+			runCmd("init")
+			appendTestDistros(t, tmpState, distro)
+			runCmd("add", "--distro", distro, "--suite", "stable", deb)
+			// Unscoped publish: dbScopes is the discovery path. With Task 3's
+			// validateDistroScope swap the namespaced row surfaces; without it,
+			// publish would emit zero suites.
+			runCmd("publish", "--no-sign")
+
+			distroDir := filepath.Join(tmpPublic, filepath.FromSlash(distro))
+			poolFile := filepath.Join(distroDir, "pool", "stable",
+				"main", "h", "hello-gz", "hello-gz_1.0_amd64.deb")
+			assert.FileExists(t, poolFile,
+				"pool file must land under the namespaced subtree")
+
+			suiteDir := filepath.Join(distroDir, "dists", "stable")
+			assert.FileExists(t, filepath.Join(suiteDir, "Release"))
+			assert.FileExists(t, filepath.Join(suiteDir, "InRelease"))
+			assert.FileExists(t, filepath.Join(suiteDir, "Release.gpg"))
+
+			releaseBody, err := os.ReadFile(filepath.Join(suiteDir, "Release"))
+			require.NoError(t, err)
+			releaseText := string(releaseBody)
+
+			// All five defaultSuite headers must be emitted verbatim — Origin/Label
+			// reflect the full slashed distro name (no segment splitting), and the
+			// composite Description uses the same verbatim form.
+			assert.Equal(t, distro, headerValue(t, releaseText, "Origin"))
+			assert.Equal(t, distro, headerValue(t, releaseText, "Label"))
+			assert.Equal(t, "stable", headerValue(t, releaseText, "Suite"))
+			assert.Equal(t, "stable", headerValue(t, releaseText, "Codename"))
+			assert.Equal(t, distro+" stable", headerValue(t, releaseText, "Description"))
+
+			pkgPath := filepath.Join(suiteDir, "main", "binary-amd64", "Packages")
+			pkgBody, err := os.ReadFile(pkgPath)
+			require.NoError(t, err)
+			pkgText := string(pkgBody)
+			// Filename inside Packages is apt-relative: the namespaced segment
+			// comes from the apt URI base, not the Filename field. A leading
+			// <distro>/ here would mean clients double-prefix the path.
+			assert.Contains(t, pkgText,
+				"Filename: pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb\n",
+				"Filename must be apt-relative (no leading namespaced segment)")
+			assert.NotContains(t, pkgText, "Filename: "+distro+"/",
+				"namespaced segment must come from the URI base, not the Filename field")
+
+			runCmd("check")
+
+			// With the only row deleted, dbScopes no longer yields this distro, so
+			// the unscoped publish can only reach it through filesystemScopes. If
+			// that walk dropped the namespaced subtree, the old non-empty Packages
+			// would survive; its absence proves the suite was rebuilt.
+			runCmd("delete", "--distro", distro, "--suite", "stable",
+				"--name", "hello-gz", "--all-versions")
+			runCmd("publish", "--no-sign")
+			assert.NoFileExists(t, pkgPath,
+				"re-publish via the filesystem-scope path must rebuild the emptied suite")
+
+			emptyBody, err := os.ReadFile(filepath.Join(suiteDir, "Release"))
+			require.NoError(t, err)
+			emptyText := string(emptyBody)
+			assert.Empty(t, headerValue(t, emptyText, "Components"))
+			assert.Empty(t, headerValue(t, emptyText, "Architectures"))
+			assert.NotContains(t, emptyText, "Packages",
+				"emptied suite must not list checksums for the old indexes")
+
+			runCmd("gc")
+			assert.NoFileExists(t, poolFile,
+				"gc must reap the orphaned pool file under the namespaced pool")
+
+			assertStateDirIsPrivate(t, tmpState)
+		})
 	}
 
-	runCmd("init")
-	appendTestDistros(t, tmpState, "customer/acme")
-	runCmd("add", "--distro", "customer/acme", "--suite", "stable", deb)
-	// Unscoped publish: dbScopes is the discovery path. With Task 3's
-	// validateDistroScope swap the namespaced row surfaces; without it,
-	// publish would emit zero suites.
-	runCmd("publish", "--no-sign")
+	t.Run("unconfigured namespaced distro rejected", func(t *testing.T) {
+		tmpState := t.TempDir()
+		tmpPublic := t.TempDir()
 
-	poolFile := filepath.Join(tmpPublic, "customer", "acme", "pool", "stable",
-		"main", "h", "hello-gz", "hello-gz_1.0_amd64.deb")
-	assert.FileExists(t, poolFile,
-		"pool file must land under the namespaced subtree")
+		var stdout, stderr bytes.Buffer
+		require.Equal(t, exitOK, run([]string{"--repo", tmpState, "init"}, &stdout, &stderr, "test-rev"),
+			"init failed: %s", stderr.String())
+		appendTestDistros(t, tmpState, "customer/acme")
 
-	suiteDir := filepath.Join(tmpPublic, "customer", "acme", "dists", "stable")
-	assert.FileExists(t, filepath.Join(suiteDir, "Release"))
-	assert.FileExists(t, filepath.Join(suiteDir, "InRelease"))
-	assert.FileExists(t, filepath.Join(suiteDir, "Release.gpg"))
-
-	releaseBody, err := os.ReadFile(filepath.Join(suiteDir, "Release"))
-	require.NoError(t, err)
-	releaseText := string(releaseBody)
-
-	// All five defaultSuite headers must be emitted verbatim — Origin/Label
-	// reflect the full slashed distro name (no segment splitting), and the
-	// composite Description uses the same verbatim form.
-	assert.Equal(t, "customer/acme", headerValue(t, releaseText, "Origin"))
-	assert.Equal(t, "customer/acme", headerValue(t, releaseText, "Label"))
-	assert.Equal(t, "stable", headerValue(t, releaseText, "Suite"))
-	assert.Equal(t, "stable", headerValue(t, releaseText, "Codename"))
-	assert.Equal(t, "customer/acme stable", headerValue(t, releaseText, "Description"))
-
-	pkgPath := filepath.Join(suiteDir, "main", "binary-amd64", "Packages")
-	pkgBody, err := os.ReadFile(pkgPath)
-	require.NoError(t, err)
-	pkgText := string(pkgBody)
-	// Filename inside Packages is apt-relative: the customer/acme/ segment
-	// comes from the apt URI base, not the Filename field. A leading
-	// customer/acme/ here would mean clients double-prefix the path.
-	assert.Contains(t, pkgText,
-		"Filename: pool/stable/main/h/hello-gz/hello-gz_1.0_amd64.deb\n",
-		"Filename must be apt-relative (no leading customer/acme/ segment)")
-	assert.NotContains(t, pkgText, "Filename: customer/acme/",
-		"namespaced segment must come from the URI base, not the Filename field")
-
-	runCmd("check")
-
-	// Second unscoped publish: now that a live customer/acme/dists/stable/Release
-	// exists on disk, the filesystemScopes half of allScopes (publish.go) is the
-	// one that has to discover the namespaced subtree — exercise it explicitly.
-	runCmd("publish", "--no-sign")
-	assert.FileExists(t, filepath.Join(suiteDir, "Release"),
-		"re-publish via the filesystem-scope path must keep the namespaced suite")
-
-	assertStateDirIsPrivate(t, tmpState)
-
-	// Negative case: a syntactically valid namespaced distro that is NOT in
-	// config.distros must be rejected by requireConfiguredDistro. The scope
-	// validator accepts foo/bar, so this proves the configured-distro gate
-	// still fires for the namespaced form.
-	var stdout, stderr bytes.Buffer
-	code := run([]string{
-		"--repo", tmpState, "--public", tmpPublic, "add",
-		"--distro", "foo/bar", "--suite", "stable", deb,
-	}, &stdout, &stderr, "test-rev")
-	require.NotEqual(t, exitOK, code,
-		"add against unconfigured namespaced distro must fail")
-	assert.Contains(t, stderr.String(), "not in config.distros",
-		"failure must come from requireConfiguredDistro, not the scope validator")
+		// A syntactically valid namespaced distro that is NOT in config.distros
+		// must be rejected by requireConfiguredDistro. The scope validator
+		// accepts foo/bar, so this proves the configured-distro gate still
+		// fires for the namespaced form.
+		stdout.Reset()
+		stderr.Reset()
+		code := run([]string{
+			"--repo", tmpState, "--public", tmpPublic, "add",
+			"--distro", "foo/bar", "--suite", "stable", deb,
+		}, &stdout, &stderr, "test-rev")
+		require.NotEqual(t, exitOK, code,
+			"add against unconfigured namespaced distro must fail")
+		assert.Contains(t, stderr.String(), "not in config.distros",
+			"failure must come from requireConfiguredDistro, not the scope validator")
+	})
 }
 
 // TestIntegration_Completion drives the full TAB-completion flow end-to-end

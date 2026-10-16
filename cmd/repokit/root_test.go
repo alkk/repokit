@@ -241,6 +241,7 @@ func TestValidateDistroScope(t *testing.T) {
 		{"empty allowed", "", false},
 		{"plain", "debian", false},
 		{"namespaced", "customer/acme", false},
+		{"dotted namespace", "7.x/debian", false},
 		{"deeper rejected", "customer/acme/extra", true},
 		{"leading slash rejected", "/acme", true},
 		{"trailing slash rejected", "customer/", true},
