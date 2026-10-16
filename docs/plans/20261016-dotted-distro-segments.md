@@ -90,23 +90,23 @@ TDD: add the failing cases first, then relax the validator.
 
 Layers: config validation (`pkg/config`), CLI integration test, user docs.
 
-- [ ] extend `TestValidateDistroName`:
+- [x] extend `TestValidateDistroName`:
   - accept: `7.x`, `7.x/debian`, `devel/7.0`, `7.10`
   - reject: `.x`, `7.`, `.hidden/debian`, `7.x/.`, `7.x/..`, `debian/7.`,
     `7..x`, `7.x/de..bian`
-- [ ] add one accept case (`7.x/debian`) to `TestValidateDistroScope` (the
+- [x] add one accept case (`7.x/debian`) to `TestValidateDistroScope` (the
   CLI-level mirror)
-- [ ] add `TestLoad` subtests:
+- [x] add `TestLoad` subtests:
   - `distros: [7.x/debian, debian]` loads, and a `suites:` override keyed
     `7.x/debian/trixie` resolves to that distro/suite;
   - an unquoted plain `7.10` distro stays `"7.10"`.
-- [ ] parametrize `TestIntegration_NamespacedDistro` over
+- [x] parametrize `TestIntegration_NamespacedDistro` over
   `{customer/acme, 7.x/debian}`, building paths with `filepath.FromSlash`
   and keeping its negative case once. For `7.x/debian` it should show that
   the pool file lands under `<public>/7.x/debian/pool/`, that
   `dists/<suite>/InRelease` is produced, and that the default
   `Origin`/`Label` are `7.x/debian`.
-- [ ] fix the test's filesystem-discovery check. Its current second
+- [x] fix the test's filesystem-discovery check. Its current second
   unscoped publish does not isolate `filesystemScopes`, because the DB row
   still exists and `allScopes` unions both sources. Replace it with:
   1. `delete` the only package;
@@ -122,14 +122,14 @@ Layers: config validation (`pkg/config`), CLI integration test, user docs.
      is reaped.
 
   This fixes a gap that already exists for `customer/acme` as well.
-- [ ] confirm the new cases fail, then relax `validateDistroSegment` to the
+- [x] confirm the new cases fail, then relax `validateDistroSegment` to the
   rule in Decisions
-- [ ] update the doc comments on `ValidateDistroName` and
+- [x] update the doc comments on `ValidateDistroName` and
   `validateDistroSegment` to the new rule
-- [ ] update `docs/usage.md` (the `--distro` validation paragraph and the
+- [x] update `docs/usage.md` (the `--distro` validation paragraph and the
   `distros` row of the config table). It should state the widened alphabet
   plus the no-leading-`.`, no-trailing-`.` and no-`..` rules.
-- [ ] gate: `make test` and `make lint` pass
+- [x] gate: `make test` and `make lint` pass
 - [ ] move this plan to `docs/plans/completed/`
 
 ## Post-Completion

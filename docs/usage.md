@@ -46,9 +46,10 @@ NUL, spaces, or control characters. `--suite`, `--component`, and `--arch`
 are single path segments and additionally reject `/`; `--suite` must also not
 end in `.new` or `.old` — those suffixes are reserved by `publish` for
 staging siblings. `--distro` may contain at most one `/` so it can name a
-namespaced distro (`customer/acme`) — each side of the slash is held to the
-`[a-zA-Z0-9-]+` distro alphabet, must be non-empty, and must not start with
-`-`. Whatever `--distro` resolves to must also appear in `config.yaml`'s
+namespaced distro (`customer/acme`, or a versioned one like `7.x/debian`) —
+each side of the slash is held to the `[a-zA-Z0-9.-]+` distro alphabet, must
+be non-empty, must not start with `-` or `.`, must not end with `.`, and must
+not contain `..`. Whatever `--distro` resolves to must also appear in `config.yaml`'s
 `distros:` list for `add`, `delete`, `publish`, `check`, and `gc`.
 
 ## Exit codes
@@ -480,7 +481,7 @@ suites:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `distros` | list of strings | yes for add/delete/publish/check/gc | `[]` | distros repokit is allowed to manage; each entry is either a plain `[a-zA-Z0-9-]+` segment or two such segments joined by exactly one `/` (`customer/acme`); no duplicates, no entry deeper than one `/`, a plain entry may not share its top-level segment with a namespaced one (`[customer, customer/acme]` is rejected), and every `suites:` key's distro half must appear here |
+| `distros` | list of strings | yes for add/delete/publish/check/gc | `[]` | distros repokit is allowed to manage; each entry is either a plain `[a-zA-Z0-9.-]+` segment (no leading `-` or `.`, no trailing `.`, no `..`) or two such segments joined by exactly one `/` (`customer/acme`, `7.x/debian`); no duplicates, no entry deeper than one `/`, a plain entry may not share its top-level segment with a namespaced one (`[customer, customer/acme]` is rejected), and every `suites:` key's distro half must appear here |
 | `signing_key` | string | yes (unless `--no-sign`) | — | gpg key id or fingerprint that signs `Release` |
 | `public_dir` | string | yes for add/publish/check/gc (unless `--public` / `$REPOKIT_PUBLIC` is set); not needed by DB-only `delete` | — | absolute path to the public-facing tree |
 | `suites` | map | no | `{}` | per-suite Release header overrides keyed by `<distro>/<suite>` (a namespaced distro yields a three-segment key like `customer/acme/stable` — the key is split on its **last** `/`) |

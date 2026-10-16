@@ -92,11 +92,13 @@ func Load(path string) (*Config, error) {
 // ValidateDistroName enforces a strict positive allowlist for distro names.
 // Distro names are user-facing scope identifiers and end up as path components
 // under <publicDir>/<distro>/...; keeping the alphabet narrow (ASCII letters in
-// either case, digits, ASCII hyphen) eliminates the need for path-segment
-// escaping or Release-header sanitization downstream.
+// either case, digits, ASCII hyphen and dot) eliminates the need for
+// path-segment escaping or Release-header sanitization downstream.
 //
-// A name is either a single plain segment ([a-zA-Z0-9-]+, no leading '-') or
-// two such segments joined by exactly one '/'. Depth >= 3 is rejected. The
+// A name is either a single plain segment ([a-zA-Z0-9.-]+, no leading '-' or
+// '.', no trailing '.', no "..") or two such segments joined by exactly one
+// '/', so a versioned namespace like "7.x/debian" is accepted. Depth >= 3 is
+// rejected. The
 // returned error is context-neutral ("must be ...", "segment ...") so callers
 // can frame it for their own surface — `config.Load` prefixes "config: distros
 // entry %q:" and `cmd/repokit` prefixes "--distro %q:".
@@ -118,26 +120,35 @@ func ValidateDistroName(name string) error {
 }
 
 // validateDistroSegment enforces the per-segment alphabet rules shared by plain
-// and namespaced distro names. Rejects empty, leading-'-', dot-segments, and
-// any byte outside [a-zA-Z0-9-].
+// and namespaced distro names. Rejects empty, leading '-' or '.', trailing '.',
+// any "..", and any byte outside [a-zA-Z0-9.-]. The leading-'.' rule keeps
+// hidden directories out of the docroot (and covers "." and ".."); the
+// trailing-'.' rule stops "7." aliasing "7" on Windows, which strips trailing
+// dots.
 func validateDistroSegment(seg string) error {
 	if seg == "" {
 		return errors.New("segment must not be empty")
 	}
-	if seg == "." || seg == ".." {
-		return fmt.Errorf("segment %q must not be '.' or '..'", seg)
-	}
 	if seg[0] == '-' {
 		return fmt.Errorf("segment %q must not start with '-'", seg)
+	}
+	if seg[0] == '.' {
+		return fmt.Errorf("segment %q must not start with '.'", seg)
+	}
+	if seg[len(seg)-1] == '.' {
+		return fmt.Errorf("segment %q must not end with '.'", seg)
+	}
+	if strings.Contains(seg, "..") {
+		return fmt.Errorf("segment %q must not contain '..'", seg)
 	}
 	for i := range len(seg) {
 		c := seg[i]
 		ok := (c >= 'a' && c <= 'z') ||
 			(c >= 'A' && c <= 'Z') ||
 			(c >= '0' && c <= '9') ||
-			c == '-'
+			c == '-' || c == '.'
 		if !ok {
-			return fmt.Errorf("segment %q: only [a-zA-Z0-9-] allowed", seg)
+			return fmt.Errorf("segment %q: only [a-zA-Z0-9.-] allowed", seg)
 		}
 	}
 	return nil
